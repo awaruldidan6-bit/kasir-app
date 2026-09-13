@@ -41,6 +41,28 @@ interface LastReceipt {
   date: string;
 }
 
+// Fungsi Konversi Angka ke Kata Terbilang Bahasa Indonesia
+function terbilangIndonesia(nominal: number): string {
+  if (nominal <= 0) return 'Nol Rupiah';
+  const satuan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh', 'Sebelas'];
+
+  function konversi(n: number): string {
+    if (n < 12) return satuan[n];
+    if (n < 20) return konversi(n - 10) + ' Belas';
+    if (n < 100) return konversi(Math.floor(n / 10)) + ' Puluh ' + konversi(n % 10);
+    if (n < 200) return 'Seratus ' + konversi(n - 100);
+    if (n < 1000) return konversi(Math.floor(n / 100)) + ' Ratus ' + konversi(n % 100);
+    if (n < 2000) return 'Seribu ' + konversi(n - 1000);
+    if (n < 1000000) return konversi(Math.floor(n / 1000)) + ' Ribu ' + konversi(n % 1000);
+    if (n < 1000000000) return konversi(Math.floor(n / 1000000)) + ' Juta ' + konversi(n % 1000000);
+    if (n < 1000000000000) return konversi(Math.floor(n / 1000000000)) + ' Miliar ' + konversi(n % 1000000000);
+    return '';
+  }
+
+  const hasil = konversi(Math.floor(nominal)).replace(/\s+/g, ' ').trim();
+  return hasil ? `${hasil} Rupiah` : '';
+}
+
 export default function KasirPage() {
   const [activeTab, setActiveTab] = useState<'kasir' | 'riwayat'>('kasir');
   const [products, setProducts] = useState<Product[]>([]);
@@ -133,6 +155,11 @@ export default function KasirPage() {
     );
   }
 
+  // Tambah nominal uang secara akumulatif
+  function addCashNominal(nominal: number) {
+    setCash((prev) => prev + nominal);
+  }
+
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const changeReturned = cash - totalAmount;
 
@@ -146,7 +173,6 @@ export default function KasirPage() {
     const invoiceNumber = `INV-${Date.now()}`;
     const currentDate = new Date().toLocaleString('id-ID');
 
-    // 1. Simpan Transaksi dengan Nama Pelanggan
     const { data: transData, error: transError } = await supabase
       .from('transactions')
       .insert([
@@ -167,7 +193,6 @@ export default function KasirPage() {
       return;
     }
 
-    // 2. Simpan Detail Item
     const itemsToInsert = cart.map((item) => ({
       transaction_id: transData.id,
       product_id: item.id,
@@ -179,7 +204,6 @@ export default function KasirPage() {
 
     await supabase.from('transaction_items').insert(itemsToInsert);
 
-    // Tampilkan Struk
     setLastReceipt({
       invoiceNumber,
       customerName: finalCustomerName,
@@ -296,33 +320,33 @@ export default function KasirPage() {
             </div>
 
             {/* Kolom Kanan: Pesanan & Pembayaran */}
-            <div className="w-full md:w-[420px] bg-white p-6 shadow-2xl border-l border-slate-200 flex flex-col justify-between">
+            <div className="w-full md:w-[440px] bg-white p-6 shadow-2xl border-l border-slate-200 flex flex-col justify-between overflow-y-auto">
               <div>
-                <div className="flex justify-between items-center border-b pb-3 mb-4">
+                <div className="flex justify-between items-center border-b pb-3 mb-3">
                   <h2 className="text-lg font-bold text-slate-800">Daftar Pesanan</h2>
                   <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full">
                     {cart.reduce((s, i) => s + i.quantity, 0)} Item
                   </span>
                 </div>
 
-                {/* Kolom Input Nama Pelanggan */}
+                {/* Input Nama Pelanggan */}
                 <div className="mb-3">
-                  <label className="text-xs font-bold text-slate-600 flex items-center gap-1 mb-1">
+                  <label className="text-xs font-bold text-slate-600 mb-1 block">
                     👤 Nama Pelanggan / No. Meja:
                   </label>
                   <input
                     type="text"
                     value={customerName}
                     onChange={(e) => setCustomerName(e.target.value)}
-                    placeholder="Contoh: Meja 3 / Budi"
+                    placeholder="Contoh: Meja 3 / Kak Budi"
                     className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
                   />
                 </div>
 
-                {/* Daftar Item di Keranjang */}
-                <div className="space-y-2.5 max-h-[26vh] overflow-y-auto pr-1">
+                {/* Keranjang Belanja */}
+                <div className="space-y-2 max-h-[22vh] overflow-y-auto pr-1">
                   {cart.length === 0 ? (
-                    <p className="text-sm text-slate-400 text-center py-6">Keranjang belanja kosong</p>
+                    <p className="text-sm text-slate-400 text-center py-5">Keranjang belanja kosong</p>
                   ) : (
                     cart.map((item) => (
                       <div key={item.id} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-100">
@@ -353,63 +377,74 @@ export default function KasirPage() {
                 </div>
               </div>
 
-              {/* Panel Pembayaran & Nominal Cepat */}
-              <div className="border-t border-slate-200 pt-3 space-y-2.5">
+              {/* Panel Pembayaran & Nominal Akumulatif */}
+              <div className="border-t border-slate-200 pt-3 space-y-2.5 mt-2">
                 <div className="flex justify-between font-extrabold text-xl text-slate-900">
                   <span>Total Tagihan:</span>
                   <span className="text-blue-600">Rp {totalAmount.toLocaleString('id-ID')}</span>
                 </div>
 
-                {totalAmount > 0 && (
-                  <div className="space-y-1">
-                    <span className="text-[11px] font-semibold text-slate-500">Pilih Nominal Cepat:</span>
-                    <div className="grid grid-cols-3 gap-1.5">
+                {/* Tombol Pecahan Cepat Akumulatif (+ Tambah) */}
+                <div className="space-y-1">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[11px] font-bold text-slate-500">Tambah Nominal Uang:</span>
+                    {cash > 0 && (
                       <button
                         type="button"
-                        onClick={() => setCash(totalAmount)}
-                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold transition"
+                        onClick={() => setCash(0)}
+                        className="text-[11px] font-bold text-red-500 hover:underline"
                       >
-                        💵 Uang Pas
+                        🔄 Reset (0)
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setCash(10000)}
-                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
-                      >
-                        10.000
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCash(20000)}
-                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
-                      >
-                        20.000
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCash(50000)}
-                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
-                      >
-                        50.000
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCash(100000)}
-                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
-                      >
-                        100.000
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCash(Math.ceil(totalAmount / 50000) * 50000)}
-                        className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition"
-                      >
-                        Bulat 50rb
-                      </button>
-                    </div>
+                    )}
                   </div>
-                )}
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setCash(totalAmount)}
+                      className="px-2 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold transition"
+                    >
+                      💵 Uang Pas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addCashNominal(10000)}
+                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
+                    >
+                      + 10.000
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addCashNominal(20000)}
+                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
+                    >
+                      + 20.000
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addCashNominal(50000)}
+                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
+                    >
+                      + 50.000
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addCashNominal(100000)}
+                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
+                    >
+                      + 100.000
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => addCashNominal(1000)}
+                      className="px-2 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition"
+                    >
+                      + 1.000
+                    </button>
+                  </div>
+                </div>
 
+                {/* Input Nominal Uang */}
                 <div>
                   <label className="text-xs font-semibold text-slate-600">Uang Diterima (Rp):</label>
                   <input
@@ -417,11 +452,15 @@ export default function KasirPage() {
                     value={cash || ''}
                     onChange={(e) => setCash(Number(e.target.value))}
                     placeholder="0"
-                    className="w-full p-2.5 border border-slate-300 rounded-xl mt-1 font-bold text-base focus:ring-2 focus:ring-blue-500 outline-none"
+                    className="w-full p-2.5 border border-slate-300 rounded-xl mt-1 font-black text-lg text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
                   />
+                  {/* Keterangan Ejaan Indonesia (Terbilang) */}
+                  <p className="text-[11px] font-semibold text-blue-700 bg-blue-50 p-2 rounded-lg mt-1 italic border border-blue-100">
+                    🗣️ Terbilang: <span className="font-bold">{terbilangIndonesia(cash)}</span>
+                  </p>
                 </div>
 
-                <div className="flex justify-between text-sm py-1 bg-slate-50 p-2.5 rounded-lg">
+                <div className="flex justify-between text-sm py-1 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
                   <span className="text-slate-600 font-medium">Uang Kembalian:</span>
                   <span className={changeReturned < 0 ? 'text-red-500 font-bold' : 'text-emerald-600 font-extrabold text-base'}>
                     Rp {changeReturned >= 0 ? changeReturned.toLocaleString('id-ID') : 0}

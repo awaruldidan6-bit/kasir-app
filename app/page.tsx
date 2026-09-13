@@ -33,6 +33,7 @@ interface TransactionHistory {
 
 interface LastReceipt {
   invoiceNumber: string;
+  customerName: string;
   items: { name: string; quantity: number; price: number }[];
   totalAmount: number;
   cashReceived: number;
@@ -44,6 +45,7 @@ export default function KasirPage() {
   const [activeTab, setActiveTab] = useState<'kasir' | 'riwayat'>('kasir');
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [customerName, setCustomerName] = useState<string>('');
   const [cash, setCash] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [historyList, setHistoryList] = useState<TransactionHistory[]>([]);
@@ -54,7 +56,6 @@ export default function KasirPage() {
     fetchTodayHistory();
   }, []);
 
-  // Ambil Data Produk
   async function fetchProducts() {
     setLoading(true);
     const { data } = await supabase.from('products').select('*');
@@ -62,9 +63,7 @@ export default function KasirPage() {
     setLoading(false);
   }
 
-  // Ambil Riwayat Transaksi Hari Ini
   async function fetchTodayHistory() {
-    // Mulai dari jam 00:00 hari ini
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -79,7 +78,6 @@ export default function KasirPage() {
     }
   }
 
-  // Reset / Hapus Seluruh Riwayat Hari Ini
   async function handleResetHistory() {
     const isConfirm = window.confirm(
       'Apakah Anda yakin ingin me-reset (menghapus) semua riwayat transaksi hari ini?'
@@ -98,13 +96,12 @@ export default function KasirPage() {
     if (error) {
       alert('Gagal me-reset riwayat: ' + error.message);
     } else {
-      alert('Riwayat hari ini berhasil di-reset menjadi kosong!');
+      alert('Riwayat hari ini berhasil di-reset!');
       setHistoryList([]);
-      fetchProducts(); // Refresh stok
+      fetchProducts();
     }
   }
 
-  // Tambah item ke keranjang
   function addToCart(product: Product) {
     if (product.stock <= 0) {
       alert('Stok produk ini habis!');
@@ -126,7 +123,6 @@ export default function KasirPage() {
     });
   }
 
-  // Kurangi / hapus item
   function removeFromCart(productId: number) {
     setCart((prev) =>
       prev
@@ -140,22 +136,23 @@ export default function KasirPage() {
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const changeReturned = cash - totalAmount;
 
-  // Checkout Transaksi
   async function handleCheckout() {
     if (cash < totalAmount) {
       alert('Uang pembayaran masih kurang!');
       return;
     }
 
+    const finalCustomerName = customerName.trim() || 'Pelanggan Umum';
     const invoiceNumber = `INV-${Date.now()}`;
     const currentDate = new Date().toLocaleString('id-ID');
 
-    // 1. Simpan Transaksi
+    // 1. Simpan Transaksi dengan Nama Pelanggan
     const { data: transData, error: transError } = await supabase
       .from('transactions')
       .insert([
         {
           invoice_number: invoiceNumber,
+          customer_name: finalCustomerName,
           total_amount: totalAmount,
           cash_received: cash,
           change_returned: changeReturned,
@@ -185,6 +182,7 @@ export default function KasirPage() {
     // Tampilkan Struk
     setLastReceipt({
       invoiceNumber,
+      customerName: finalCustomerName,
       items: cart.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price })),
       totalAmount,
       cashReceived: cash,
@@ -194,11 +192,11 @@ export default function KasirPage() {
 
     setCart([]);
     setCash(0);
+    setCustomerName('');
     fetchProducts();
-    fetchTodayHistory(); // Update riwayat langsung
+    fetchTodayHistory();
   }
 
-  // Hitung Total Pendapatan Hari Ini
   const totalOmsetHariIni = historyList.reduce((sum, item) => sum + Number(item.total_amount), 0);
 
   return (
@@ -213,7 +211,6 @@ export default function KasirPage() {
           </div>
         </div>
 
-        {/* Tombol Pindah Tab */}
         <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
           <button
             onClick={() => setActiveTab('kasir')}
@@ -298,7 +295,7 @@ export default function KasirPage() {
               )}
             </div>
 
-            {/* Kolom Kanan: Keranjang & Checkout */}
+            {/* Kolom Kanan: Pesanan & Pembayaran */}
             <div className="w-full md:w-[420px] bg-white p-6 shadow-2xl border-l border-slate-200 flex flex-col justify-between">
               <div>
                 <div className="flex justify-between items-center border-b pb-3 mb-4">
@@ -308,12 +305,27 @@ export default function KasirPage() {
                   </span>
                 </div>
 
-                <div className="space-y-3 max-h-[32vh] overflow-y-auto pr-1">
+                {/* Kolom Input Nama Pelanggan */}
+                <div className="mb-3">
+                  <label className="text-xs font-bold text-slate-600 flex items-center gap-1 mb-1">
+                    👤 Nama Pelanggan / No. Meja:
+                  </label>
+                  <input
+                    type="text"
+                    value={customerName}
+                    onChange={(e) => setCustomerName(e.target.value)}
+                    placeholder="Contoh: Meja 3 / Budi"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
+                  />
+                </div>
+
+                {/* Daftar Item di Keranjang */}
+                <div className="space-y-2.5 max-h-[26vh] overflow-y-auto pr-1">
                   {cart.length === 0 ? (
-                    <p className="text-sm text-slate-400 text-center py-8">Keranjang belanja kosong</p>
+                    <p className="text-sm text-slate-400 text-center py-6">Keranjang belanja kosong</p>
                   ) : (
                     cart.map((item) => (
-                      <div key={item.id} className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100">
+                      <div key={item.id} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-100">
                         <div>
                           <p className="font-bold text-slate-800 text-sm">{item.name}</p>
                           <p className="text-xs text-slate-500">
@@ -341,57 +353,56 @@ export default function KasirPage() {
                 </div>
               </div>
 
-              {/* Panel Pembayaran */}
-              <div className="border-t border-slate-200 pt-4 space-y-3">
+              {/* Panel Pembayaran & Nominal Cepat */}
+              <div className="border-t border-slate-200 pt-3 space-y-2.5">
                 <div className="flex justify-between font-extrabold text-xl text-slate-900">
                   <span>Total Tagihan:</span>
                   <span className="text-blue-600">Rp {totalAmount.toLocaleString('id-ID')}</span>
                 </div>
 
-                {/* Tombol Pecahan Cepat */}
                 {totalAmount > 0 && (
-                  <div className="space-y-1.5">
-                    <span className="text-xs font-semibold text-slate-500">Pilih Nominal Cepat:</span>
+                  <div className="space-y-1">
+                    <span className="text-[11px] font-semibold text-slate-500">Pilih Nominal Cepat:</span>
                     <div className="grid grid-cols-3 gap-1.5">
                       <button
                         type="button"
                         onClick={() => setCash(totalAmount)}
-                        className="px-2 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold transition"
+                        className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold transition"
                       >
                         💵 Uang Pas
                       </button>
                       <button
                         type="button"
                         onClick={() => setCash(10000)}
-                        className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
+                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
                       >
                         10.000
                       </button>
                       <button
                         type="button"
                         onClick={() => setCash(20000)}
-                        className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
+                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
                       >
                         20.000
                       </button>
                       <button
                         type="button"
                         onClick={() => setCash(50000)}
-                        className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
+                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
                       >
                         50.000
                       </button>
                       <button
                         type="button"
                         onClick={() => setCash(100000)}
-                        className="px-2 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
+                        className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold transition"
                       >
                         100.000
                       </button>
                       <button
                         type="button"
                         onClick={() => setCash(Math.ceil(totalAmount / 50000) * 50000)}
-                        className="px-2 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition"
+                        className="px-2 py-1 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition"
                       >
                         Bulat 50rb
                       </button>
@@ -432,7 +443,6 @@ export default function KasirPage() {
         {/* ================= TAB 2: RIWAYAT HARI INI ================= */}
         {activeTab === 'riwayat' && (
           <div className="flex-1 p-6 overflow-y-auto max-w-5xl mx-auto w-full space-y-6">
-            {/* Header Riwayat & Tombol Reset */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
               <div>
                 <h2 className="text-2xl font-black text-slate-800">📊 Laporan & Riwayat Hari Ini</h2>
@@ -441,7 +451,6 @@ export default function KasirPage() {
                 </p>
               </div>
 
-              {/* Tombol Restart / Reset Riwayat */}
               <div className="flex gap-2">
                 <button
                   onClick={fetchTodayHistory}
@@ -458,7 +467,6 @@ export default function KasirPage() {
               </div>
             </div>
 
-            {/* Kartu Ringkasan Omset & Transaksi */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white p-6 rounded-2xl shadow-lg shadow-blue-100">
                 <p className="text-xs font-semibold text-blue-100 uppercase tracking-wider">Total Pendapatan Hari Ini</p>
@@ -470,7 +478,6 @@ export default function KasirPage() {
               </div>
             </div>
 
-            {/* Daftar Riwayat Transaksi */}
             <div className="space-y-4">
               <h3 className="font-bold text-slate-800 text-lg">Daftar Transaksi:</h3>
 
@@ -488,8 +495,13 @@ export default function KasirPage() {
                   >
                     <div className="flex justify-between items-start border-b border-slate-100 pb-3">
                       <div>
-                        <span className="font-black text-blue-700 text-sm">{tx.invoice_number}</span>
-                        <p className="text-xs text-slate-400 mt-0.5">
+                        <div className="flex items-center gap-2">
+                          <span className="font-black text-blue-700 text-sm">{tx.invoice_number}</span>
+                          <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-md font-bold">
+                            👤 {tx.customer_name}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mt-1">
                           ⏰ {new Date(tx.created_at).toLocaleTimeString('id-ID')} WIB
                         </p>
                       </div>
@@ -501,7 +513,6 @@ export default function KasirPage() {
                       </div>
                     </div>
 
-                    {/* Rincian Menu yang Dipesan */}
                     <div className="bg-slate-50 p-3 rounded-xl space-y-1.5 text-xs">
                       <p className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Item Dipesan:</p>
                       {tx.transaction_items?.map((item) => (
@@ -512,7 +523,6 @@ export default function KasirPage() {
                       ))}
                     </div>
 
-                    {/* Rincian Bayar & Kembalian */}
                     <div className="flex justify-between items-center text-xs text-slate-500 pt-1">
                       <div>
                         <span>Dibayar: Rp {Number(tx.cash_received).toLocaleString('id-ID')}</span>
@@ -525,6 +535,7 @@ export default function KasirPage() {
                         onClick={() => {
                           setLastReceipt({
                             invoiceNumber: tx.invoice_number,
+                            customerName: tx.customer_name,
                             items: tx.transaction_items?.map((i) => ({
                               name: i.product_name,
                               quantity: i.quantity,
@@ -558,6 +569,9 @@ export default function KasirPage() {
               <h3 className="text-xl font-black text-slate-800 mt-1">STRUK PEMBAYARAN</h3>
               <p className="text-xs text-slate-400 mt-0.5">{lastReceipt.invoiceNumber}</p>
               <p className="text-xs text-slate-400">{lastReceipt.date}</p>
+              <div className="mt-2 inline-block bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-bold">
+                Pelanggan: {lastReceipt.customerName}
+              </div>
             </div>
 
             <div className="space-y-2 max-h-48 overflow-y-auto text-sm border-b pb-4">

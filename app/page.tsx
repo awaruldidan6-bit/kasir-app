@@ -41,7 +41,6 @@ interface LastReceipt {
   date: string;
 }
 
-// Fungsi Konversi Angka ke Kata Terbilang Bahasa Indonesia
 function terbilangIndonesia(nominal: number): string {
   if (nominal <= 0) return 'Nol Rupiah';
   const satuan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh', 'Sebelas'];
@@ -63,9 +62,13 @@ function terbilangIndonesia(nominal: number): string {
   return hasil ? `${hasil} Rupiah` : '';
 }
 
-export default function KasirPage() {
-  const [activeTab, setActiveTab] = useState<'kasir' | 'riwayat'>('kasir');
+export default function KasirApp() {
+  // Mode Pengguna: 'pelanggan' atau 'kasir'
+  const [userRole, setUserRole] = useState<'pelanggan' | 'kasir'>('kasir');
+  const [activeTab, setActiveTab] = useState<'pos' | 'riwayat'>('pos');
+
   const [products, setProducts] = useState<Product[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState<string>('');
   const [cash, setCash] = useState<number>(0);
@@ -155,7 +158,6 @@ export default function KasirPage() {
     );
   }
 
-  // Tambah nominal uang secara akumulatif
   function addCashNominal(nominal: number) {
     setCash((prev) => prev + nominal);
   }
@@ -163,15 +165,18 @@ export default function KasirPage() {
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const changeReturned = cash - totalAmount;
 
-  async function handleCheckout() {
-    if (cash < totalAmount) {
-      alert('Uang pembayaran masih kurang!');
+  // Checkout Transaksi (Kasir atau Pelanggan)
+  async function handleProcessOrder(isCustomerSelfOrder: boolean = false) {
+    if (!isCustomerSelfOrder && cash < totalAmount) {
+      alert('Uang pembayaran kasir masih kurang!');
       return;
     }
 
     const finalCustomerName = customerName.trim() || 'Pelanggan Umum';
     const invoiceNumber = `INV-${Date.now()}`;
     const currentDate = new Date().toLocaleString('id-ID');
+    const finalCash = isCustomerSelfOrder ? totalAmount : cash;
+    const finalChange = isCustomerSelfOrder ? 0 : changeReturned;
 
     const { data: transData, error: transError } = await supabase
       .from('transactions')
@@ -180,16 +185,16 @@ export default function KasirPage() {
           invoice_number: invoiceNumber,
           customer_name: finalCustomerName,
           total_amount: totalAmount,
-          cash_received: cash,
-          change_returned: changeReturned,
-          payment_method: 'Tunai',
+          cash_received: finalCash,
+          change_returned: finalChange,
+          payment_method: isCustomerSelfOrder ? 'Pesan Mandiri (Bayar di Kasir)' : 'Tunai',
         },
       ])
       .select()
       .single();
 
     if (transError) {
-      alert('Gagal menyimpan transaksi: ' + transError.message);
+      alert('Gagal memproses pesanan: ' + transError.message);
       return;
     }
 
@@ -209,8 +214,8 @@ export default function KasirPage() {
       customerName: finalCustomerName,
       items: cart.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price })),
       totalAmount,
-      cashReceived: cash,
-      changeReturned,
+      cashReceived: finalCash,
+      changeReturned: finalChange,
       date: currentDate,
     });
 
@@ -221,74 +226,221 @@ export default function KasirPage() {
     fetchTodayHistory();
   }
 
+  const categories = ['Semua', ...Array.from(new Set(products.map((p) => p.category || 'Umum')))];
+  const filteredProducts =
+    selectedCategory === 'Semua'
+      ? products
+      : products.filter((p) => (p.category || 'Umum') === selectedCategory);
+
   const totalOmsetHariIni = historyList.reduce((sum, item) => sum + Number(item.total_amount), 0);
 
   return (
     <div className="flex flex-col h-screen bg-slate-100 text-slate-800 font-sans">
-      {/* NAVBAR ATAS */}
-      <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex justify-between items-center shadow-sm">
+      {/* NAVBAR ATAS DENGAN GANTI MODE */}
+      <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex flex-wrap justify-between items-center shadow-sm gap-3">
         <div className="flex items-center gap-3">
-          <span className="text-2xl">🏪</span>
+          <span className="text-3xl">🏪</span>
           <div>
             <h1 className="text-xl font-black text-blue-700 leading-tight">KASIR KITA</h1>
-            <p className="text-xs text-slate-400">Sistem Kasir & Pemantauan Penjualan</p>
+            <p className="text-xs text-slate-400">
+              {userRole === 'kasir' ? 'Panel Kasir & Manajemen Toko' : 'Menu Pesan Mandiri Pelanggan'}
+            </p>
           </div>
         </div>
 
-        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
-          <button
-            onClick={() => setActiveTab('kasir')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-              activeTab === 'kasir'
-                ? 'bg-blue-600 text-white shadow'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            🛒 Menu Kasir
-          </button>
-          <button
-            onClick={() => {
-              setActiveTab('riwayat');
-              fetchTodayHistory();
-            }}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-              activeTab === 'riwayat'
-                ? 'bg-blue-600 text-white shadow'
-                : 'text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            📊 Riwayat Hari Ini ({historyList.length})
-          </button>
+        {/* Switcher Mode: Kasir vs Pelanggan */}
+        <div className="flex items-center gap-2">
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+            <button
+              onClick={() => setUserRole('pelanggan')}
+              className={`px-3.5 py-1.5 rounded-lg transition flex items-center gap-1 ${
+                userRole === 'pelanggan'
+                  ? 'bg-emerald-600 text-white shadow'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              👤 Mode Pelanggan
+            </button>
+            <button
+              onClick={() => setUserRole('kasir')}
+              className={`px-3.5 py-1.5 rounded-lg transition flex items-center gap-1 ${
+                userRole === 'kasir'
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              🏪 Mode Kasir
+            </button>
+          </div>
+
+          {/* Tab Kasir (Hanya tampil di Mode Kasir) */}
+          {userRole === 'kasir' && (
+            <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-bold">
+              <button
+                onClick={() => setActiveTab('pos')}
+                className={`px-3 py-1.5 rounded-lg transition ${
+                  activeTab === 'pos' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                🛒 Kasir
+              </button>
+              <button
+                onClick={() => {
+                  setActiveTab('riwayat');
+                  fetchTodayHistory();
+                }}
+                className={`px-3 py-1.5 rounded-lg transition ${
+                  activeTab === 'riwayat' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600'
+                }`}
+              >
+                📊 Riwayat ({historyList.length})
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
-      {/* KONTEN UTAMA */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* ================= TAB 1: KASIR ================= */}
-        {activeTab === 'kasir' && (
-          <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-            {/* Kolom Kiri: Menu */}
-            <div className="flex-1 p-6 overflow-y-auto">
-              <div className="flex justify-between items-center mb-6">
-                <div>
-                  <h2 className="text-xl font-bold text-slate-800">Daftar Menu Makanan & Minuman</h2>
-                  <p className="text-xs text-slate-500">Klik menu untuk menambahkan ke pesanan</p>
-                </div>
-                <button
-                  onClick={fetchProducts}
-                  className="px-3.5 py-1.5 bg-white border border-slate-200 text-blue-600 rounded-xl text-xs font-semibold hover:bg-blue-50 shadow-sm transition"
+      {/* ================= TAMPILAN 1: MODE PELANGGAN ================= */}
+      {userRole === 'pelanggan' && (
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden max-w-7xl mx-auto w-full p-4 gap-4">
+          {/* Menu Makanan Pelanggan */}
+          <div className="flex-1 bg-white rounded-3xl p-6 shadow-sm border border-slate-200 flex flex-col overflow-hidden">
+            <div className="mb-4">
+              <h2 className="text-xl font-black text-slate-800">🍽️ Pilih Menu Favoritmu</h2>
+              <p className="text-xs text-slate-400 mt-0.5">Silakan pilih makanan/minuman yang ingin kamu pesan</p>
+
+              {/* Filter Kategori */}
+              <div className="flex gap-2 mt-3 overflow-x-auto pb-1">
+                {categories.map((cat) => (
+                  <button
+                    key={cat}
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`px-4 py-1.5 rounded-xl text-xs font-bold transition whitespace-nowrap ${
+                      selectedCategory === cat
+                        ? 'bg-emerald-600 text-white shadow-sm'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Grid Menu Pelanggan */}
+            <div className="flex-1 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 gap-3.5 pr-1">
+              {filteredProducts.map((p) => (
+                <div
+                  key={p.id}
+                  onClick={() => addToCart(p)}
+                  className="p-4 bg-slate-50 hover:bg-emerald-50/50 rounded-2xl border border-slate-200 hover:border-emerald-500 transition cursor-pointer flex flex-col justify-between"
                 >
-                  🔄 Refresh Menu
-                </button>
+                  <div>
+                    <span className="text-[10px] bg-white text-slate-500 px-2 py-0.5 rounded-md font-bold border">
+                      {p.category || 'Umum'}
+                    </span>
+                    <h3 className="font-bold text-slate-800 text-base mt-2">{p.name}</h3>
+                    <p className="text-emerald-600 font-black text-lg mt-1">
+                      Rp {p.price.toLocaleString('id-ID')}
+                    </p>
+                  </div>
+                  <button className="w-full mt-3 py-1.5 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-700 transition">
+                    + Tambah ke Pesanan
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Keranjang & Kirim Pesanan Pelanggan */}
+          <div className="w-full md:w-96 bg-white rounded-3xl p-6 shadow-sm border border-slate-200 flex flex-col justify-between">
+            <div>
+              <h2 className="text-lg font-bold border-b pb-3 mb-3">Pesanan Anda</h2>
+
+              <div className="mb-3">
+                <label className="text-xs font-bold text-slate-600 mb-1 block">
+                  👤 Nama / No. Meja Anda:
+                </label>
+                <input
+                  type="text"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  placeholder="Contoh: Meja 4 / Kak Sinta"
+                  className="w-full p-2.5 bg-slate-50 border rounded-xl text-sm font-semibold outline-none focus:ring-2 focus:ring-emerald-500"
+                />
               </div>
 
-              {loading ? (
-                <p className="text-slate-500 text-center py-10">Memuat menu...</p>
-              ) : products.length === 0 ? (
-                <div className="bg-white p-8 rounded-2xl border text-center text-slate-500 shadow-sm">
-                  Belum ada menu di database.
+              <div className="space-y-2 max-h-[35vh] overflow-y-auto pr-1">
+                {cart.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-10">Belum ada menu yang dipilih</p>
+                ) : (
+                  cart.map((item) => (
+                    <div key={item.id} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border">
+                      <div>
+                        <p className="font-bold text-slate-800 text-xs">{item.name}</p>
+                        <p className="text-[11px] text-slate-400">
+                          {item.quantity} × Rp {item.price.toLocaleString('id-ID')}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => removeFromCart(item.id)}
+                          className="w-6 h-6 bg-red-100 text-red-600 rounded-lg font-bold text-xs"
+                        >
+                          -
+                        </button>
+                        <span className="font-bold text-xs">{item.quantity}</span>
+                        <button
+                          onClick={() => addToCart(item)}
+                          className="w-6 h-6 bg-emerald-100 text-emerald-600 rounded-lg font-bold text-xs"
+                        >
+                          +
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="border-t pt-3 space-y-3 mt-3">
+              <div className="flex justify-between font-extrabold text-lg">
+                <span>Total Biaya:</span>
+                <span className="text-emerald-600">Rp {totalAmount.toLocaleString('id-ID')}</span>
+              </div>
+              <button
+                onClick={() => handleProcessOrder(true)}
+                disabled={cart.length === 0}
+                className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-2xl font-bold text-sm shadow-lg shadow-emerald-200 disabled:bg-slate-300 disabled:shadow-none transition"
+              >
+                Kirim Pesanan ke Kasir 🚀
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ================= TAMPILAN 2: MODE KASIR ================= */}
+      {userRole === 'kasir' && (
+        <div className="flex-1 flex overflow-hidden">
+          {/* TAB POS KASIR */}
+          {activeTab === 'pos' && (
+            <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
+              {/* Katalog Menu Kasir */}
+              <div className="flex-1 p-6 overflow-y-auto">
+                <div className="flex justify-between items-center mb-6">
+                  <div>
+                    <h2 className="text-xl font-bold text-slate-800">Daftar Menu Kasir</h2>
+                    <p className="text-xs text-slate-500">Klik menu untuk memasukkan ke transaksi</p>
+                  </div>
+                  <button
+                    onClick={fetchProducts}
+                    className="px-3.5 py-1.5 bg-white border text-blue-600 rounded-xl text-xs font-semibold hover:bg-blue-50 transition"
+                  >
+                    🔄 Refresh Menu
+                  </button>
                 </div>
-              ) : (
+
                 <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
                   {products.map((p) => (
                     <div
@@ -305,352 +457,185 @@ export default function KasirPage() {
                           Rp {p.price.toLocaleString('id-ID')}
                         </p>
                       </div>
-                      <div className="flex justify-between items-center mt-4 pt-3 border-t border-slate-100 text-xs">
-                        <span className={p.stock > 10 ? 'text-slate-400' : 'text-amber-600 font-semibold'}>
-                          Stok: {p.stock}
-                        </span>
-                        <span className="text-blue-600 font-bold bg-blue-50 px-2.5 py-1 rounded-lg">
-                          + Tambah
-                        </span>
+                      <div className="flex justify-between items-center mt-4 pt-3 border-t text-xs">
+                        <span className="text-slate-400">Stok: {p.stock}</span>
+                        <span className="text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded-md">+ Tambah</span>
                       </div>
                     </div>
                   ))}
                 </div>
-              )}
-            </div>
+              </div>
 
-            {/* Kolom Kanan: Pesanan & Pembayaran */}
-            <div className="w-full md:w-[440px] bg-white p-6 shadow-2xl border-l border-slate-200 flex flex-col justify-between overflow-y-auto">
-              <div>
-                <div className="flex justify-between items-center border-b pb-3 mb-3">
-                  <h2 className="text-lg font-bold text-slate-800">Daftar Pesanan</h2>
-                  <span className="text-xs font-semibold bg-blue-100 text-blue-700 px-2.5 py-1 rounded-full">
-                    {cart.reduce((s, i) => s + i.quantity, 0)} Item
-                  </span>
-                </div>
+              {/* Panel Kasir (Uang Tunai, Pecahan Akumulatif & Kembalian) */}
+              <div className="w-full md:w-[440px] bg-white p-6 shadow-2xl border-l border-slate-200 flex flex-col justify-between overflow-y-auto">
+                <div>
+                  <h2 className="text-lg font-bold border-b pb-3 mb-3">Transaksi Kasir</h2>
 
-                {/* Input Nama Pelanggan */}
-                <div className="mb-3">
-                  <label className="text-xs font-bold text-slate-600 mb-1 block">
-                    👤 Nama Pelanggan / No. Meja:
-                  </label>
-                  <input
-                    type="text"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    placeholder="Contoh: Meja 3 / Kak Budi"
-                    className="w-full p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500 focus:bg-white transition"
-                  />
-                </div>
+                  <div className="mb-3">
+                    <label className="text-xs font-bold text-slate-600 mb-1 block">👤 Nama Pelanggan / No. Meja:</label>
+                    <input
+                      type="text"
+                      value={customerName}
+                      onChange={(e) => setCustomerName(e.target.value)}
+                      placeholder="Contoh: Meja 3 / Kak Budi"
+                      className="w-full p-2.5 bg-slate-50 border rounded-xl text-sm font-semibold outline-none focus:ring-2 focus:ring-blue-500"
+                    />
+                  </div>
 
-                {/* Keranjang Belanja */}
-                <div className="space-y-2 max-h-[22vh] overflow-y-auto pr-1">
-                  {cart.length === 0 ? (
-                    <p className="text-sm text-slate-400 text-center py-5">Keranjang belanja kosong</p>
-                  ) : (
-                    cart.map((item) => (
-                      <div key={item.id} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+                  <div className="space-y-2 max-h-[20vh] overflow-y-auto pr-1">
+                    {cart.map((item) => (
+                      <div key={item.id} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border">
                         <div>
-                          <p className="font-bold text-slate-800 text-sm">{item.name}</p>
-                          <p className="text-xs text-slate-500">
+                          <p className="font-bold text-slate-800 text-xs">{item.name}</p>
+                          <p className="text-[11px] text-slate-400">
                             {item.quantity} × Rp {item.price.toLocaleString('id-ID')}
                           </p>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => removeFromCart(item.id)}
-                            className="w-7 h-7 bg-red-100 hover:bg-red-200 text-red-600 rounded-lg flex items-center justify-center font-bold transition"
-                          >
-                            -
-                          </button>
-                          <span className="font-bold text-sm w-4 text-center">{item.quantity}</span>
-                          <button
-                            onClick={() => addToCart(item)}
-                            className="w-7 h-7 bg-blue-100 hover:bg-blue-200 text-blue-600 rounded-lg flex items-center justify-center font-bold transition"
-                          >
-                            +
-                          </button>
+                        <div className="flex items-center gap-1.5">
+                          <button onClick={() => removeFromCart(item.id)} className="w-6 h-6 bg-red-100 text-red-600 rounded-lg font-bold text-xs">-</button>
+                          <span className="font-bold text-xs">{item.quantity}</span>
+                          <button onClick={() => addToCart(item)} className="w-6 h-6 bg-blue-100 text-blue-600 rounded-lg font-bold text-xs">+</button>
                         </div>
                       </div>
-                    ))
-                  )}
-                </div>
-              </div>
-
-              {/* Panel Pembayaran & Nominal Akumulatif */}
-              <div className="border-t border-slate-200 pt-3 space-y-2.5 mt-2">
-                <div className="flex justify-between font-extrabold text-xl text-slate-900">
-                  <span>Total Tagihan:</span>
-                  <span className="text-blue-600">Rp {totalAmount.toLocaleString('id-ID')}</span>
-                </div>
-
-                {/* Tombol Pecahan Cepat Akumulatif (+ Tambah) */}
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] font-bold text-slate-500">Tambah Nominal Uang:</span>
-                    {cash > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => setCash(0)}
-                        className="text-[11px] font-bold text-red-500 hover:underline"
-                      >
-                        🔄 Reset (0)
-                      </button>
-                    )}
-                  </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setCash(totalAmount)}
-                      className="px-2 py-2 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold transition"
-                    >
-                      💵 Uang Pas
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addCashNominal(10000)}
-                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
-                    >
-                      + 10.000
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addCashNominal(20000)}
-                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
-                    >
-                      + 20.000
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addCashNominal(50000)}
-                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
-                    >
-                      + 50.000
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addCashNominal(100000)}
-                      className="px-2 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition"
-                    >
-                      + 100.000
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => addCashNominal(1000)}
-                      className="px-2 py-2 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition"
-                    >
-                      + 1.000
-                    </button>
+                    ))}
                   </div>
                 </div>
 
-                {/* Input Nominal Uang */}
-                <div>
-                  <label className="text-xs font-semibold text-slate-600">Uang Diterima (Rp):</label>
-                  <input
-                    type="number"
-                    value={cash || ''}
-                    onChange={(e) => setCash(Number(e.target.value))}
-                    placeholder="0"
-                    className="w-full p-2.5 border border-slate-300 rounded-xl mt-1 font-black text-lg text-slate-800 focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                  {/* Keterangan Ejaan Indonesia (Terbilang) */}
-                  <p className="text-[11px] font-semibold text-blue-700 bg-blue-50 p-2 rounded-lg mt-1 italic border border-blue-100">
-                    🗣️ Terbilang: <span className="font-bold">{terbilangIndonesia(cash)}</span>
-                  </p>
-                </div>
+                {/* Kalkulator Kasir */}
+                <div className="border-t pt-3 space-y-2.5 mt-2">
+                  <div className="flex justify-between font-extrabold text-xl">
+                    <span>Total:</span>
+                    <span className="text-blue-600">Rp {totalAmount.toLocaleString('id-ID')}</span>
+                  </div>
 
-                <div className="flex justify-between text-sm py-1 bg-slate-50 p-2.5 rounded-lg border border-slate-100">
-                  <span className="text-slate-600 font-medium">Uang Kembalian:</span>
-                  <span className={changeReturned < 0 ? 'text-red-500 font-bold' : 'text-emerald-600 font-extrabold text-base'}>
-                    Rp {changeReturned >= 0 ? changeReturned.toLocaleString('id-ID') : 0}
-                  </span>
-                </div>
+                  {/* Tombol Akumulatif */}
+                  <div className="space-y-1">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[11px] font-bold text-slate-500">Tambah Pecahan Uang:</span>
+                      {cash > 0 && (
+                        <button onClick={() => setCash(0)} className="text-[11px] font-bold text-red-500 hover:underline">
+                          🔄 Reset Uang (0)
+                        </button>
+                      )}
+                    </div>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button onClick={() => setCash(totalAmount)} className="px-2 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold">💵 Uang Pas</button>
+                      <button onClick={() => addCashNominal(10000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 10.000</button>
+                      <button onClick={() => addCashNominal(20000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 20.000</button>
+                      <button onClick={() => addCashNominal(50000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 50.000</button>
+                      <button onClick={() => addCashNominal(100000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 100.000</button>
+                      <button onClick={() => addCashNominal(1000)} className="px-2 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold">+ 1.000</button>
+                    </div>
+                  </div>
 
-                <button
-                  onClick={handleCheckout}
-                  disabled={cart.length === 0 || totalAmount <= 0}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 rounded-xl font-bold text-base shadow-lg shadow-blue-200 disabled:bg-slate-300 disabled:shadow-none transition"
-                >
-                  Bayar Sekarang (Checkout)
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+                  <div>
+                    <label className="text-xs font-semibold text-slate-600">Uang Diterima (Rp):</label>
+                    <input
+                      type="number"
+                      value={cash || ''}
+                      onChange={(e) => setCash(Number(e.target.value))}
+                      placeholder="0"
+                      className="w-full p-2.5 border rounded-xl mt-1 font-black text-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                    <p className="text-[11px] font-semibold text-blue-700 bg-blue-50 p-2 rounded-lg mt-1 italic border border-blue-100">
+                      🗣️ Terbilang: <span className="font-bold">{terbilangIndonesia(cash)}</span>
+                    </p>
+                  </div>
 
-        {/* ================= TAB 2: RIWAYAT HARI INI ================= */}
-        {activeTab === 'riwayat' && (
-          <div className="flex-1 p-6 overflow-y-auto max-w-5xl mx-auto w-full space-y-6">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <div>
-                <h2 className="text-2xl font-black text-slate-800">📊 Laporan & Riwayat Hari Ini</h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Catatan seluruh transaksi kasir yang masuk pada hari ini
-                </p>
-              </div>
+                  <div className="flex justify-between text-sm py-1 bg-slate-50 p-2 rounded-lg border">
+                    <span className="text-slate-600">Kembalian:</span>
+                    <span className={changeReturned < 0 ? 'text-red-500 font-bold' : 'text-emerald-600 font-extrabold text-base'}>
+                      Rp {changeReturned >= 0 ? changeReturned.toLocaleString('id-ID') : 0}
+                    </span>
+                  </div>
 
-              <div className="flex gap-2">
-                <button
-                  onClick={fetchTodayHistory}
-                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition"
-                >
-                  🔄 Refresh
-                </button>
-                <button
-                  onClick={handleResetHistory}
-                  className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-md shadow-red-200 transition flex items-center gap-1.5"
-                >
-                  🗑️ Reset / Restart Riwayat
-                </button>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white p-6 rounded-2xl shadow-lg shadow-blue-100">
-                <p className="text-xs font-semibold text-blue-100 uppercase tracking-wider">Total Pendapatan Hari Ini</p>
-                <h3 className="text-3xl font-black mt-2">Rp {totalOmsetHariIni.toLocaleString('id-ID')}</h3>
-              </div>
-              <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-                <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Total Transaksi Selesai</p>
-                <h3 className="text-3xl font-black text-slate-800 mt-2">{historyList.length} Transaksi</h3>
-              </div>
-            </div>
-
-            <div className="space-y-4">
-              <h3 className="font-bold text-slate-800 text-lg">Daftar Transaksi:</h3>
-
-              {historyList.length === 0 ? (
-                <div className="bg-white p-12 text-center rounded-2xl border border-slate-200 text-slate-400">
-                  <span className="text-4xl">📭</span>
-                  <p className="font-semibold mt-2">Belum ada transaksi untuk hari ini.</p>
-                  <p className="text-xs">Lakukan transaksi di menu kasir untuk melihatnya di sini.</p>
-                </div>
-              ) : (
-                historyList.map((tx) => (
-                  <div
-                    key={tx.id}
-                    className="bg-white p-5 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition space-y-3"
+                  <button
+                    onClick={() => handleProcessOrder(false)}
+                    disabled={cart.length === 0 || totalAmount <= 0}
+                    className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 rounded-xl font-bold text-base shadow-lg shadow-blue-200 disabled:bg-slate-300 disabled:shadow-none transition"
                   >
-                    <div className="flex justify-between items-start border-b border-slate-100 pb-3">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <span className="font-black text-blue-700 text-sm">{tx.invoice_number}</span>
-                          <span className="bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded-md font-bold">
-                            👤 {tx.customer_name}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-400 mt-1">
-                          ⏰ {new Date(tx.created_at).toLocaleTimeString('id-ID')} WIB
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <span className="font-black text-slate-900 text-base">
-                          Rp {Number(tx.total_amount).toLocaleString('id-ID')}
-                        </span>
-                        <p className="text-xs text-emerald-600 font-semibold">Tunai / Selesai</p>
-                      </div>
-                    </div>
+                    Bayar & Cetak Struk 🧾
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
-                    <div className="bg-slate-50 p-3 rounded-xl space-y-1.5 text-xs">
-                      <p className="font-bold text-slate-500 uppercase tracking-wider text-[10px]">Item Dipesan:</p>
-                      {tx.transaction_items?.map((item) => (
-                        <div key={item.id} className="flex justify-between text-slate-700 font-medium">
-                          <span>{item.product_name} × {item.quantity}</span>
-                          <span>Rp {Number(item.subtotal).toLocaleString('id-ID')}</span>
-                        </div>
-                      ))}
-                    </div>
+          {/* TAB RIWAYAT OMSET KASIR */}
+          {activeTab === 'riwayat' && (
+            <div className="flex-1 p-6 overflow-y-auto max-w-5xl mx-auto w-full space-y-6">
+              <div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm">
+                <div>
+                  <h2 className="text-2xl font-black text-slate-800">📊 Laporan & Riwayat Hari Ini</h2>
+                  <p className="text-xs text-slate-400 mt-1">Pantau omset harian toko secara realtime</p>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={fetchTodayHistory} className="px-4 py-2 bg-slate-100 rounded-xl text-xs font-bold">🔄 Refresh</button>
+                  <button onClick={handleResetHistory} className="px-4 py-2 bg-red-600 text-white rounded-xl text-xs font-bold">🗑️ Reset Riwayat</button>
+                </div>
+              </div>
 
-                    <div className="flex justify-between items-center text-xs text-slate-500 pt-1">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="bg-gradient-to-br from-blue-600 to-blue-700 text-white p-6 rounded-2xl shadow-lg">
+                  <p className="text-xs font-semibold text-blue-100">Total Pendapatan Hari Ini</p>
+                  <h3 className="text-3xl font-black mt-2">Rp {totalOmsetHariIni.toLocaleString('id-ID')}</h3>
+                </div>
+                <div className="bg-white p-6 rounded-2xl border shadow-sm">
+                  <p className="text-xs font-semibold text-slate-400">Total Transaksi Selesai</p>
+                  <h3 className="text-3xl font-black text-slate-800 mt-2">{historyList.length} Transaksi</h3>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                {historyList.map((tx) => (
+                  <div key={tx.id} className="bg-white p-5 rounded-2xl border shadow-sm space-y-2">
+                    <div className="flex justify-between">
                       <div>
-                        <span>Dibayar: Rp {Number(tx.cash_received).toLocaleString('id-ID')}</span>
-                        <span className="mx-2">•</span>
-                        <span className="text-emerald-600 font-semibold">
-                          Kembalian: Rp {Number(tx.change_returned).toLocaleString('id-ID')}
-                        </span>
+                        <span className="font-black text-blue-700 text-sm">{tx.invoice_number}</span>
+                        <span className="ml-2 bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded font-bold">👤 {tx.customer_name}</span>
+                        <p className="text-xs text-slate-400 mt-0.5">⏰ {new Date(tx.created_at).toLocaleTimeString('id-ID')} WIB</p>
                       </div>
-                      <button
-                        onClick={() => {
-                          setLastReceipt({
-                            invoiceNumber: tx.invoice_number,
-                            customerName: tx.customer_name,
-                            items: tx.transaction_items?.map((i) => ({
-                              name: i.product_name,
-                              quantity: i.quantity,
-                              price: i.price,
-                            })) || [],
-                            totalAmount: Number(tx.total_amount),
-                            cashReceived: Number(tx.cash_received),
-                            changeReturned: Number(tx.change_returned),
-                            date: new Date(tx.created_at).toLocaleString('id-ID'),
-                          });
-                        }}
-                        className="px-3 py-1 bg-blue-50 hover:bg-blue-100 text-blue-600 rounded-lg font-bold transition"
-                      >
-                        🧾 Lihat Struk
-                      </button>
+                      <span className="font-black text-base text-slate-900">Rp {Number(tx.total_amount).toLocaleString('id-ID')}</span>
                     </div>
                   </div>
-                ))
-              )}
+                ))}
+              </div>
             </div>
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      )}
 
-      {/* MODAL STRUK CETAK */}
+      {/* MODAL STRUK PEMBAYARAN */}
       {lastReceipt && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
             <div className="text-center border-b pb-4">
               <span className="text-3xl">🧾</span>
               <h3 className="text-xl font-black text-slate-800 mt-1">STRUK PEMBAYARAN</h3>
-              <p className="text-xs text-slate-400 mt-0.5">{lastReceipt.invoiceNumber}</p>
-              <p className="text-xs text-slate-400">{lastReceipt.date}</p>
+              <p className="text-xs text-slate-400">{lastReceipt.invoiceNumber} • {lastReceipt.date}</p>
               <div className="mt-2 inline-block bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-bold">
                 Pelanggan: {lastReceipt.customerName}
               </div>
             </div>
 
             <div className="space-y-2 max-h-48 overflow-y-auto text-sm border-b pb-4">
-              <p className="text-xs font-bold text-slate-400 uppercase tracking-wider">Rincian Menu:</p>
               {lastReceipt.items.map((item, index) => (
                 <div key={index} className="flex justify-between items-center text-slate-700">
-                  <span>{item.name} <span className="text-slate-400 text-xs">×{item.quantity}</span></span>
+                  <span>{item.name} ×{item.quantity}</span>
                   <span className="font-semibold">Rp {(item.price * item.quantity).toLocaleString('id-ID')}</span>
                 </div>
               ))}
             </div>
 
             <div className="space-y-1.5 text-sm">
-              <div className="flex justify-between font-bold text-slate-800">
-                <span>Total Tagihan:</span>
-                <span>Rp {lastReceipt.totalAmount.toLocaleString('id-ID')}</span>
-              </div>
-              <div className="flex justify-between text-slate-600">
-                <span>Uang Diterima:</span>
-                <span>Rp {lastReceipt.cashReceived.toLocaleString('id-ID')}</span>
-              </div>
-              <div className="flex justify-between font-extrabold text-emerald-600 text-base pt-1 border-t">
-                <span>Kembalian:</span>
-                <span>Rp {lastReceipt.changeReturned.toLocaleString('id-ID')}</span>
-              </div>
+              <div className="flex justify-between font-bold"><span>Total:</span><span>Rp {lastReceipt.totalAmount.toLocaleString('id-ID')}</span></div>
+              <div className="flex justify-between text-slate-500"><span>Dibayar:</span><span>Rp {lastReceipt.cashReceived.toLocaleString('id-ID')}</span></div>
+              <div className="flex justify-between font-extrabold text-emerald-600 border-t pt-1"><span>Kembalian:</span><span>Rp {lastReceipt.changeReturned.toLocaleString('id-ID')}</span></div>
             </div>
 
             <div className="grid grid-cols-2 gap-3 pt-2">
-              <button
-                onClick={() => window.print()}
-                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-sm transition"
-              >
-                🖨️ Cetak Struk
-              </button>
-              <button
-                onClick={() => setLastReceipt(null)}
-                className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-sm transition"
-              >
-                Tutup
-              </button>
+              <button onClick={() => window.print()} className="w-full py-2.5 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm">🖨️ Cetak Struk</button>
+              <button onClick={() => setLastReceipt(null)} className="w-full py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm">Tutup</button>
             </div>
           </div>
         </div>

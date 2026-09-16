@@ -1,24 +1,25 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { createClient } from '@supabase/supabase-js'
 
-// Inisialisasi Supabase Client
+// Inisialisasi Supabase
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || 'https://rmtinkpblyzbyazbmnia.supabase.co'
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJtdGlua3BibHl6YnlhemJtbmlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3MzczMDY0NDEsImV4cCI6MjA1Mjg4MjQ0MX0.m9V_0qXy98G9ZqQe-t5Q_wQp7eK3N9e1p6F-qR7wYxM'
 const supabase = createClient(supabaseUrl, supabaseAnonKey)
 
 // Format Rupiah
-const formatRupiah = (number: number) => {
+const formatRupiah = (val: number | string) => {
+  const num = Number(val) || 0
   return new Intl.NumberFormat('id-ID', {
     style: 'currency',
     currency: 'IDR',
     minimumFractionDigits: 0,
     maximumFractionDigits: 0
-  }).format(number || 0)
+  }).format(num).replace('IDR', 'Rp')
 }
 
-// Konversi Angka ke Terbilang Bahasa Indonesia
+// Konversi Angka ke Terbilang
 function terbilang(nominal: number): string {
   if (nominal <= 0) return 'Nol Rupiah'
   const bilangan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh', 'Sebelas']
@@ -37,40 +38,41 @@ function terbilang(nominal: number): string {
   return (sebut(nominal).trim().replace(/\s+/g, ' ') + ' Rupiah').trim()
 }
 
-export default function KasirDashboard() {
+export default function KasirPage() {
   // Autentikasi PIN
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [pinInput, setPinInput] = useState('')
   const [pinError, setPinError] = useState(false)
 
-  // Data & State
-  const [activeTab, setActiveTab] = useState<'pos' | 'orders' | 'history'>('orders')
-  const [orders, setOrders] = useState<any[]>([])
+  // Tab & Data
+  const [activeTab, setActiveTab] = useState<'pos' | 'orders' | 'history'>('pos')
   const [menuItems, setMenuItems] = useState<any[]>([])
-  const [cart, setCart] = useState<any[]>([])
+  const [orders, setOrders] = useState<any[]>([])
+  
+  // State Form Kasir POS
   const [customerName, setCustomerName] = useState('')
   const [tableNumber, setTableNumber] = useState('')
-  
-  // State Pembayaran di POS
-  const [posCashReceived, setPosCashReceived] = useState<number>(0)
-  
-  // State Pembayaran dari Riwayat Pesanan
+  const [cart, setCart] = useState<any[]>([])
+  const [paymentMethod, setPaymentMethod] = useState<'Tunai' | 'QRIS'>('Tunai')
+  const [uangDiterima, setUangDiterima] = useState<number>(0)
+
+  // State Modal Bayar Riwayat Pesanan
   const [payingOrder, setPayingOrder] = useState<any | null>(null)
   const [payingCash, setPayingCash] = useState<number>(0)
 
-  // State Modal Struk
+  // State Modal Cetak Struk
   const [receiptOrder, setReceiptOrder] = useState<any | null>(null)
   const [isPrintingBluetooth, setIsPrintingBluetooth] = useState(false)
 
-  // Web Audio Alarm untuk Pesanan Baru
+  // Suara Notifikasi Pesanan Masuk
   const playNotificationSound = () => {
     try {
       const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)()
       const osc = audioCtx.createOscillator()
       const gain = audioCtx.createGain()
       osc.type = 'sine'
-      osc.frequency.setValueAtTime(587.33, audioCtx.currentTime) // D5
-      osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.15) // A5
+      osc.frequency.setValueAtTime(587.33, audioCtx.currentTime)
+      osc.frequency.setValueAtTime(880, audioCtx.currentTime + 0.15)
       gain.gain.setValueAtTime(0.3, audioCtx.currentTime)
       gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4)
       osc.connect(gain)
@@ -78,41 +80,34 @@ export default function KasirDashboard() {
       osc.start()
       osc.stop(audioCtx.currentTime + 0.4)
     } catch (e) {
-      console.log('Audio not allowed yet')
+      console.log('Audio disabled')
     }
   }
 
-  // Load Menu & Pesanan
-  const fetchMenu = async () => {
-    const { data } = await supabase.from('menu_items').select('*').order('name')
-    if (data) setMenuItems(data)
-  }
+  // Load Data Menu & Pesanan
+  const fetchData = async () => {
+    const { data: menu } = await supabase.from('menu_items').select('*').order('name')
+    if (menu) setMenuItems(menu)
 
-  const fetchOrders = async () => {
-    const { data } = await supabase
+    const { data: ord } = await supabase
       .from('orders')
       .select('*, order_items(*, menu_items(*))')
       .order('created_at', { ascending: false })
-    if (data) setOrders(data)
+    if (ord) setOrders(ord)
   }
 
   useEffect(() => {
-    fetchMenu()
-    fetchOrders()
+    fetchData()
 
-    // Realtime subscription
+    // Realtime listener Supabase
     const channel = supabase
-      .channel('schema-db-changes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
-        (payload) => {
-          fetchOrders()
-          if (payload.eventType === 'INSERT') {
-            playNotificationSound()
-          }
+      .channel('schema-changes')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders' }, (payload) => {
+        fetchData()
+        if (payload.eventType === 'INSERT') {
+          playNotificationSound()
         }
-      )
+      })
       .subscribe()
 
     return () => {
@@ -120,7 +115,7 @@ export default function KasirDashboard() {
     }
   }, [])
 
-  // Handler Login PIN (Default: 1234)
+  // Handler Login PIN
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault()
     if (pinInput === '1234') {
@@ -132,148 +127,160 @@ export default function KasirDashboard() {
     }
   }
 
-  // Handler POS Langsung
+  // Operasi Keranjang POS
   const addToCart = (item: any) => {
-    const existing = cart.find(i => i.id === item.id)
-    if (existing) {
-      setCart(cart.map(i => i.id === item.id ? { ...i, qty: i.qty + 1 } : i))
-    } else {
-      setCart([...cart, { ...item, qty: 1 }])
-    }
+    const itemPrice = Number(item.price || item.harga || 0)
+    setCart((prev) => {
+      const exist = prev.find((i) => i.id === item.id)
+      if (exist) {
+        return prev.map((i) => (i.id === item.id ? { ...i, qty: i.qty + 1 } : i))
+      }
+      return [...prev, { ...item, price: itemPrice, qty: 1 }]
+    })
   }
 
   const updateCartQty = (id: string, delta: number) => {
-    setCart(cart.map(i => {
-      if (i.id === id) {
-        const newQty = i.qty + delta
-        return newQty > 0 ? { ...i, qty: newQty } : null
-      }
-      return i
-    }).filter(Boolean))
+    setCart((prev) =>
+      prev
+        .map((item) => {
+          if (item.id === id) {
+            const newQty = item.qty + delta
+            return newQty > 0 ? { ...item, qty: newQty } : null
+          }
+          return item
+        })
+        .filter(Boolean)
+    )
   }
 
-  const cartTotal = cart.reduce((sum, item) => sum + (Number(item.price) * item.qty), 0)
-  const posKembalian = Math.max(0, posCashReceived - cartTotal)
+  // Hitung Total Tagihan POS (Aman dari bug NaN)
+  const totalTagihan = useMemo(() => {
+    return cart.reduce((total, item) => {
+      const price = Number(item.price ?? item.harga ?? 0)
+      const qty = Number(item.qty ?? item.quantity ?? 1)
+      return total + price * qty
+    }, 0)
+  }, [cart])
 
-  // Submit Order dari Tab POS
-  const handlePosCheckout = async (withReceipt: boolean) => {
+  // Hitung Uang Kembalian POS
+  const kembalian = useMemo(() => {
+    if (paymentMethod === 'QRIS') return 0
+    return Math.max(0, Number(uangDiterima || 0) - totalTagihan)
+  }, [uangDiterima, totalTagihan, paymentMethod])
+
+  // Checkout POS Langsung
+  const handleCheckoutPOS = async (withReceipt: boolean) => {
     if (cart.length === 0) return alert('Keranjang masih kosong!')
-    if (posCashReceived < cartTotal) return alert('Uang pembayaran masih kurang!')
+    if (paymentMethod === 'Tunai' && uangDiterima < totalTagihan) {
+      return alert('Uang yang diterima kasir masih kurang dari total tagihan!')
+    }
 
     try {
-      // 1. Simpan order baru
+      // 1. Simpan order ke Supabase
       const { data: newOrder, error: orderErr } = await supabase
         .from('orders')
         .insert({
           customer_name: customerName || 'Pelanggan Kasir',
           table_number: tableNumber || 'Kasir',
-          total_amount: cartTotal,
+          total_amount: totalTagihan,
           status: 'Lunas',
-          payment_method: 'Tunai',
-          cash_received: posCashReceived,
-          change_amount: posKembalian
+          payment_method: paymentMethod,
+          cash_received: paymentMethod === 'Tunai' ? uangDiterima : totalTagihan,
+          change_amount: kembalian
         })
         .select()
         .single()
 
       if (orderErr) throw orderErr
 
-      // 2. Simpan order items
-      const itemsToInsert = cart.map(item => ({
+      // 2. Simpan item pesanan
+      const itemsToInsert = cart.map((item) => ({
         order_id: newOrder.id,
         menu_item_id: item.id,
         quantity: item.qty,
-        price_per_unit: item.price,
-        subtotal: item.price * item.qty
+        price_per_unit: Number(item.price || item.harga || 0),
+        subtotal: Number(item.price || item.harga || 0) * item.qty
       }))
 
       await supabase.from('order_items').insert(itemsToInsert)
 
-      // Reset form POS
+      // Simpan data untuk struk
+      const completedOrderData = {
+        ...newOrder,
+        order_items: cart.map((c) => ({
+          quantity: c.qty,
+          price_per_unit: Number(c.price || c.harga || 0),
+          menu_items: { name: c.name || c.nama }
+        })),
+        cash_received: paymentMethod === 'Tunai' ? uangDiterima : totalTagihan,
+        change_amount: kembalian
+      }
+
+      // Reset form
       setCart([])
       setCustomerName('')
       setTableNumber('')
-      const finalPaid = posCashReceived
-      setPosCashReceived(0)
-
-      // Refresh data
-      await fetchOrders()
+      setUangDiterima(0)
+      fetchData()
 
       if (withReceipt) {
-        setReceiptOrder({
-          ...newOrder,
-          order_items: cart.map(c => ({
-            quantity: c.qty,
-            price_per_unit: c.price,
-            menu_items: { name: c.name }
-          })),
-          cash_received: finalPaid,
-          change_amount: finalPaid - cartTotal
-        })
+        setReceiptOrder(completedOrderData)
       } else {
-        alert('✅ Pembayaran Berhasil Disimpan!')
+        alert('✅ Transaksi Berhasil Disimpan!')
       }
     } catch (err: any) {
-      alert('Gagal memproses pesanan: ' + err.message)
+      alert('Gagal memproses transaksi: ' + err.message)
     }
   }
 
-  // Update Status Pesanan di Tab Riwayat
-  const handleUpdateStatus = async (orderId: string, newStatus: string) => {
-    await supabase.from('orders').update({ status: newStatus }).eq('id', orderId)
-    fetchOrders()
-  }
-
-  // Buka Modal Pembayaran untuk Pesanan dari Riwayat
-  const openPayModal = (order: any) => {
+  // Buka Modal Pembayaran dari Riwayat Pesanan
+  const openPayOrderModal = (order: any) => {
     setPayingOrder(order)
-    setPayingCash(Number(order.total_amount || 0)) // Default set ke Uang Pas
+    setPayingCash(Number(order.total_amount || 0))
   }
 
-  // Selesaikan Pembayaran dari Modal Riwayat (Dengan Opsi Struk / Tanpa Struk)
-  const handleCompletePayment = async (withReceipt: boolean) => {
+  // Selesaikan Pembayaran Riwayat (Opsi Struk & Tanpa Struk)
+  const handleCompleteOrderPayment = async (withReceipt: boolean) => {
     if (!payingOrder) return
-    const total = Number(payingOrder.total_amount || 0)
-    if (payingCash < total) {
+    const orderTotal = Number(payingOrder.total_amount || 0)
+    if (payingCash < orderTotal) {
       return alert('Uang diterima kurang dari total tagihan!')
     }
 
-    const kembalian = Math.max(0, payingCash - total)
+    const change = Math.max(0, payingCash - orderTotal)
 
-    // Update status ke Lunas dan catat uang diterima & kembalian
     await supabase.from('orders').update({
       status: 'Lunas',
       cash_received: payingCash,
-      change_amount: kembalian
+      change_amount: change
     }).eq('id', payingOrder.id)
 
-    await fetchOrders()
+    fetchData()
 
-    const orderToPrint = {
+    const finishedOrder = {
       ...payingOrder,
       cash_received: payingCash,
-      change_amount: kembalian
+      change_amount: change
     }
 
     setPayingOrder(null)
     setPayingCash(0)
 
     if (withReceipt) {
-      setReceiptOrder(orderToPrint)
+      setReceiptOrder(finishedOrder)
     } else {
-      alert('✅ Pesanan berhasil diselesaikan & ditandai Lunas!')
+      alert('✅ Pesanan berhasil diselesaikan & Lunas!')
     }
   }
 
-  // Cetak Bluetooth ESC/POS Thermal Printer (58mm)
-  const printViaBluetooth = async () => {
+  // Cetak Bluetooth Thermal 58mm
+  const printBluetooth = async () => {
     if (!receiptOrder) return
     setIsPrintingBluetooth(true)
-
     try {
       const nav: any = navigator
       if (!nav.bluetooth) {
-        alert('Browser Anda tidak mendukung Web Bluetooth. Silakan gunakan Google Chrome di Android / PC.')
+        alert('Web Bluetooth tidak didukung di browser ini. Gunakan Google Chrome di Android / Laptop.')
         setIsPrintingBluetooth(false)
         return
       }
@@ -298,65 +305,55 @@ export default function KasirDashboard() {
         if (writeChar) break
       }
 
-      if (!writeChar) {
-        throw new Error('Karakteristik printer Bluetooth tidak ditemukan.')
-      }
+      if (!writeChar) throw new Error('Karakteristik Bluetooth printer tidak ditemukan.')
 
-      // Format Teks ESC/POS
       const encoder = new TextEncoder()
       let text = '\x1B\x40' // Init printer
       text += '\x1B\x61\x01' // Align Center
       text += 'WARUNG KOPI / KASIR\n'
-      text += 'Struk Pembayaran\n'
-      text += '--------------------------------\n'
+      text += 'STRUK PEMBAYARAN\n'
+      text += '================================\n'
       text += '\x1B\x61\x00' // Align Left
-      text += `No. Meja  : ${receiptOrder.table_number || '-'}\n`
+      text += `Meja      : ${receiptOrder.table_number || '-'}\n`
       text += `Pelanggan : ${receiptOrder.customer_name || '-'}\n`
       text += `Waktu     : ${new Date(receiptOrder.created_at || Date.now()).toLocaleTimeString('id-ID')}\n`
       text += '--------------------------------\n'
 
       receiptOrder.order_items?.forEach((item: any) => {
-        const name = item.menu_items?.name || 'Item'
-        const qty = item.quantity || 1
-        const price = Number(item.price_per_unit || 0)
+        const name = item.menu_items?.name || item.name || 'Item'
+        const qty = item.quantity || item.qty || 1
+        const price = Number(item.price_per_unit || item.price || 0)
         text += `${name}\n`
-        text += `  ${qty}x ${formatRupiah(price).padEnd(12)} = ${formatRupiah(qty * price)}\n`
+        text += `  ${qty} x ${formatRupiah(price)} = ${formatRupiah(qty * price)}\n`
       })
 
       text += '--------------------------------\n'
-      text += `TOTAL       : ${formatRupiah(receiptOrder.total_amount)}\n`
-      text += `TUNAI       : ${formatRupiah(receiptOrder.cash_received || receiptOrder.total_amount)}\n`
-      text += `KEMBALIAN   : ${formatRupiah(receiptOrder.change_amount || 0)}\n`
-      text += '--------------------------------\n'
+      text += `TOTAL     : ${formatRupiah(receiptOrder.total_amount)}\n`
+      text += `TUNAI     : ${formatRupiah(receiptOrder.cash_received || receiptOrder.total_amount)}\n`
+      text += `KEMBALIAN : ${formatRupiah(receiptOrder.change_amount || 0)}\n`
+      text += '================================\n'
       text += '\x1B\x61\x01' // Align Center
       text += 'Terima Kasih Atas Kunjungan Anda!\n\n\n\n'
 
-      const dataBytes = encoder.encode(text)
-      await writeChar.writeValue(dataBytes)
-      alert('✅ Berhasil mengirim cetak ke Printer Bluetooth!')
+      await writeChar.writeValue(encoder.encode(text))
+      alert('✅ Struk berhasil dikirim ke printer!')
     } catch (err: any) {
-      console.error(err)
       alert('Gagal cetak Bluetooth: ' + err.message)
     } finally {
       setIsPrintingBluetooth(false)
     }
   }
 
-  // Cetak Standar Browser / PDF
-  const printStandard = () => {
-    window.print()
-  }
-
-  // Screen Kunci PIN
+  // Tampilan Login Kunci PIN
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-900 flex items-center justify-center p-4">
-        <div className="bg-slate-800 border border-slate-700 p-8 rounded-2xl max-w-sm w-full shadow-2xl text-center">
-          <div className="w-16 h-16 bg-amber-500/20 text-amber-400 rounded-full flex items-center justify-center mx-auto mb-4 text-2xl font-bold">
+        <div className="bg-slate-800 border border-slate-700 p-8 rounded-3xl max-w-sm w-full shadow-2xl text-center">
+          <div className="w-16 h-16 bg-blue-500/20 text-blue-400 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl font-bold">
             🔒
           </div>
           <h1 className="text-2xl font-bold text-white mb-1">Akses Kasir</h1>
-          <p className="text-slate-400 text-sm mb-6">Masukkan PIN keamanan untuk masuk</p>
+          <p className="text-slate-400 text-xs mb-6">Masukkan PIN keamanan kasir</p>
 
           <form onSubmit={handleLogin} className="space-y-4">
             <input
@@ -365,15 +362,15 @@ export default function KasirDashboard() {
               value={pinInput}
               onChange={(e) => setPinInput(e.target.value)}
               placeholder="PIN (Default: 1234)"
-              className="w-full text-center tracking-[1em] text-2xl font-bold py-3 bg-slate-900 border border-slate-700 rounded-xl text-white focus:outline-none focus:border-amber-500"
+              className="w-full text-center tracking-[1em] text-2xl font-bold py-3 bg-slate-900 border border-slate-700 rounded-2xl text-white focus:outline-none focus:border-blue-500"
               autoFocus
             />
-            {pinError && <p className="text-rose-500 text-sm">PIN salah, silakan coba lagi (1234).</p>}
+            {pinError && <p className="text-rose-400 text-xs">PIN salah! Gunakan 1234.</p>}
             <button
               type="submit"
-              className="w-full py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl shadow-lg transition-all"
+              className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-2xl shadow-lg transition-all"
             >
-              Masuk Dashboard
+              Masuk Kasir
             </button>
           </form>
         </div>
@@ -381,49 +378,49 @@ export default function KasirDashboard() {
     )
   }
 
-  // Menghitung kembalian modal bayar secara real-time
-  const payingTotal = Number(payingOrder?.total_amount || 0)
-  const payingKembalian = Math.max(0, Number(payingCash || 0) - payingTotal)
+  // Kembalian modal bayar riwayat
+  const payingOrderTotal = Number(payingOrder?.total_amount || 0)
+  const payingOrderChange = Math.max(0, Number(payingCash || 0) - payingOrderTotal)
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
-      {/* Top Header */}
-      <header className="bg-slate-900 border-b border-slate-800 px-6 py-4 flex justify-between items-center sticky top-0 z-30">
+    <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col font-sans">
+      {/* Header Kasir */}
+      <header className="bg-white border-b border-slate-200 px-6 py-3.5 flex justify-between items-center sticky top-0 z-30 shadow-sm">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-amber-500 rounded-xl flex items-center justify-center font-bold text-slate-950 text-xl shadow-lg">
-            ⚡
+          <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center font-bold text-white text-xl shadow">
+            🛒
           </div>
           <div>
-            <h1 className="font-bold text-lg text-white">Kasir Smart POS</h1>
-            <p className="text-xs text-slate-400">Mode Kasir Aktif • PIN Keamanan Terkunci</p>
+            <h1 className="font-bold text-lg text-slate-900 leading-tight">Kasir Pintar POS</h1>
+            <p className="text-xs text-slate-500">Sistem Kasir & Cetak Struk Realtime</p>
           </div>
         </div>
 
-        {/* Tab Navigation */}
-        <div className="flex bg-slate-950 p-1 rounded-xl border border-slate-800">
-          <button
-            onClick={() => setActiveTab('orders')}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all flex items-center gap-2 ${
-              activeTab === 'orders' ? 'bg-amber-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
-            }`}
-          >
-            📋 Pesanan Masuk
-            <span className="bg-slate-900 text-white text-xs px-2 py-0.5 rounded-full border border-slate-700">
-              {orders.filter(o => o.status !== 'Lunas' && o.status !== 'Selesai').length}
-            </span>
-          </button>
+        {/* Tab Selector */}
+        <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
           <button
             onClick={() => setActiveTab('pos')}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-              activeTab === 'pos' ? 'bg-amber-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+              activeTab === 'pos' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             🛒 Kasir Langsung (POS)
           </button>
           <button
+            onClick={() => setActiveTab('orders')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+              activeTab === 'orders' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            📋 Pesanan Masuk
+            <span className="bg-blue-600 text-white text-[10px] px-2 py-0.5 rounded-full font-bold">
+              {orders.filter((o) => o.status !== 'Lunas' && o.status !== 'Selesai').length}
+            </span>
+          </button>
+          <button
             onClick={() => setActiveTab('history')}
-            className={`px-4 py-2 rounded-lg text-sm font-semibold transition-all ${
-              activeTab === 'history' ? 'bg-amber-500 text-slate-950 shadow-md' : 'text-slate-400 hover:text-white'
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all ${
+              activeTab === 'history' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
             📜 Riwayat Transaksi
@@ -432,132 +429,40 @@ export default function KasirDashboard() {
 
         <button
           onClick={() => setIsAuthenticated(false)}
-          className="text-xs bg-slate-800 hover:bg-rose-500/20 hover:text-rose-400 border border-slate-700 px-3 py-2 rounded-lg text-slate-300 transition-all"
+          className="text-xs font-semibold bg-slate-100 hover:bg-rose-50 hover:text-rose-600 border border-slate-300 px-3.5 py-2 rounded-xl text-slate-700 transition-all"
         >
-          🔒 Kunci Kasir
+          🔒 Kunci
         </button>
       </header>
 
-      {/* Konten Utama Berdasarkan Tab */}
+      {/* Main Content */}
       <main className="flex-1 p-6 max-w-7xl w-full mx-auto">
-        {/* ================= TAB 1: PESANAN MASUK ================= */}
-        {activeTab === 'orders' && (
-          <div>
-            <div className="flex justify-between items-center mb-6">
-              <div>
-                <h2 className="text-xl font-bold text-white">Daftar Antrean & Pembayaran</h2>
-                <p className="text-sm text-slate-400">Kelola status pesanan dari pelanggan atau terima pembayaran di sini</p>
-              </div>
-              <button
-                onClick={fetchOrders}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 text-sm font-medium rounded-xl flex items-center gap-2"
-              >
-                🔄 Refresh
-              </button>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {orders
-                .filter(o => o.status !== 'Lunas' && o.status !== 'Selesai')
-                .map((order) => (
-                  <div
-                    key={order.id}
-                    className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-xl flex flex-col justify-between"
-                  >
-                    <div>
-                      <div className="flex justify-between items-start mb-3">
-                        <div>
-                          <span className="text-xs font-semibold px-2.5 py-1 rounded-full bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                            Meja {order.table_number || '-'}
-                          </span>
-                          <h3 className="font-bold text-lg text-white mt-1">{order.customer_name || 'Pelanggan'}</h3>
-                        </div>
-                        <span className="text-xs text-slate-400">
-                          {new Date(order.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </div>
-
-                      {/* Item List */}
-                      <div className="space-y-2 py-3 border-y border-slate-800 my-3 text-sm">
-                        {order.order_items?.map((item: any, idx: number) => (
-                          <div key={idx} className="flex justify-between text-slate-300">
-                            <span>{item.quantity}x {item.menu_items?.name || 'Item'}</span>
-                            <span className="font-medium text-slate-400">{formatRupiah(Number(item.price_per_unit) * item.quantity)}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex justify-between items-center mb-4">
-                        <span className="text-slate-400 text-sm">Total Tagihan:</span>
-                        <span className="text-lg font-extrabold text-amber-400">{formatRupiah(order.total_amount)}</span>
-                      </div>
-                    </div>
-
-                    {/* Tombol Aksi Pesanan */}
-                    <div className="space-y-2 pt-2">
-                      <div className="grid grid-cols-2 gap-2">
-                        <button
-                          onClick={() => handleUpdateStatus(order.id, 'Sedang Dimasak')}
-                          className={`py-2 rounded-xl text-xs font-bold border transition-all ${
-                            order.status === 'Sedang Dimasak'
-                              ? 'bg-blue-600 border-blue-500 text-white'
-                              : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
-                          }`}
-                        >
-                          👨‍🍳 Dimasak
-                        </button>
-                        <button
-                          onClick={() => handleUpdateStatus(order.id, 'Siap Disajikan')}
-                          className={`py-2 rounded-xl text-xs font-bold border transition-all ${
-                            order.status === 'Siap Disajikan'
-                              ? 'bg-emerald-600 border-emerald-500 text-white'
-                              : 'bg-slate-800 border-slate-700 text-slate-300 hover:bg-slate-700'
-                          }`}
-                        >
-                          🍽️ Siap
-                        </button>
-                      </div>
-
-                      {/* Tombol Bayar / Selesaikan */}
-                      <button
-                        onClick={() => openPayModal(order)}
-                        className="w-full py-3 bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 text-white font-bold rounded-xl shadow-lg flex items-center justify-center gap-2 text-sm"
-                      >
-                        💵 Bayar / Selesaikan Pesanan
-                      </button>
-                    </div>
-                  </div>
-                ))}
-
-              {orders.filter(o => o.status !== 'Lunas' && o.status !== 'Selesai').length === 0 && (
-                <div className="col-span-full py-16 text-center bg-slate-900/50 rounded-2xl border border-slate-800">
-                  <p className="text-slate-400">Tidak ada antrean pesanan yang belum lunas. 🎉</p>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ================= TAB 2: KASIR LANGSUNG (POS) ================= */}
+        {/* ================= TAB 1: KASIR POS LANGSUNG ================= */}
         {activeTab === 'pos' && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Katalog Menu */}
-            <div className="lg:col-span-2 space-y-4">
-              <h2 className="text-xl font-bold text-white">Katalog Menu</h2>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+            {/* Katalog Menu (7 Kolom) */}
+            <div className="lg:col-span-7 space-y-4">
+              <div className="flex justify-between items-center">
+                <h2 className="text-xl font-extrabold text-slate-800">Daftar Menu</h2>
+                <span className="text-xs text-slate-500">{menuItems.length} Menu Tersedia</span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
                 {menuItems.map((item) => (
                   <div
                     key={item.id}
                     onClick={() => addToCart(item)}
-                    className="bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-2xl cursor-pointer transition-all hover:scale-[1.02] flex flex-col justify-between shadow-md"
+                    className="bg-white border border-slate-200 hover:border-blue-500 p-4 rounded-2xl cursor-pointer transition-all hover:shadow-md flex flex-col justify-between"
                   >
                     <div>
-                      <h4 className="font-bold text-white text-base">{item.name}</h4>
-                      <p className="text-xs text-slate-400 line-clamp-2 mt-1">{item.description}</p>
+                      <h4 className="font-bold text-slate-900 text-sm">{item.name || item.nama}</h4>
+                      <p className="text-[11px] text-slate-500 line-clamp-2 mt-1">{item.description}</p>
                     </div>
                     <div className="mt-4 flex justify-between items-center">
-                      <span className="font-bold text-amber-400 text-sm">{formatRupiah(item.price)}</span>
-                      <span className="w-8 h-8 rounded-lg bg-amber-500 text-slate-950 font-bold flex items-center justify-center text-sm shadow">
+                      <span className="font-extrabold text-blue-600 text-sm">
+                        {formatRupiah(Number(item.price || item.harga || 0))}
+                      </span>
+                      <span className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 hover:bg-blue-600 hover:text-white font-bold flex items-center justify-center text-sm transition-colors">
                         +
                       </span>
                     </div>
@@ -566,174 +471,316 @@ export default function KasirDashboard() {
               </div>
             </div>
 
-            {/* Keranjang & Checkout POS */}
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 shadow-2xl flex flex-col justify-between h-fit">
+            {/* Panel Transaksi Kasir (5 Kolom) */}
+            <div className="lg:col-span-5 bg-white border border-slate-200 rounded-3xl p-5 shadow-lg space-y-4 sticky top-20">
+              <h3 className="font-extrabold text-xl text-slate-900 pb-2 border-b border-slate-100">Transaksi Kasir</h3>
+
+              {/* Input Nama & Meja */}
               <div>
-                <h3 className="font-bold text-lg text-white mb-4 pb-2 border-b border-slate-800">Keranjang Kasir</h3>
-                
-                <div className="grid grid-cols-2 gap-2 mb-4">
-                  <input
-                    type="text"
-                    placeholder="Nama Pelanggan"
-                    value={customerName}
-                    onChange={(e) => setCustomerName(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
-                  />
-                  <input
-                    type="text"
-                    placeholder="No. Meja / Takeaway"
-                    value={tableNumber}
-                    onChange={(e) => setTableNumber(e.target.value)}
-                    className="bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
-                  />
-                </div>
+                <label className="text-xs font-bold text-slate-700 block mb-1">👤 Nama Pelanggan / No. Meja:</label>
+                <input
+                  type="text"
+                  placeholder="Contoh: Meja 05 / Pak Budi"
+                  value={customerName}
+                  onChange={(e) => setCustomerName(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-sm text-slate-900 focus:outline-none focus:border-blue-500 font-medium"
+                />
+              </div>
 
-                {/* Items in Cart */}
-                <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
-                  {cart.map((item) => (
-                    <div key={item.id} className="flex justify-between items-center bg-slate-950 p-2.5 rounded-xl border border-slate-800 text-sm">
-                      <div className="flex-1 pr-2">
-                        <p className="font-medium text-white">{item.name}</p>
-                        <p className="text-xs text-amber-400">{formatRupiah(item.price)}</p>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={() => updateCartQty(item.id, -1)}
-                          className="w-7 h-7 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold"
-                        >
-                          -
-                        </button>
-                        <span className="font-bold w-4 text-center">{item.qty}</span>
-                        <button
-                          onClick={() => updateCartQty(item.id, 1)}
-                          className="w-7 h-7 rounded-lg bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold"
-                        >
-                          +
-                        </button>
-                      </div>
+              {/* List Keranjang */}
+              <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                {cart.map((item) => (
+                  <div
+                    key={item.id}
+                    className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-200 text-sm"
+                  >
+                    <div className="flex-1 pr-2">
+                      <p className="font-bold text-slate-900 text-xs">{item.name || item.nama}</p>
+                      <p className="text-[11px] text-slate-500">
+                        {item.qty} × {formatRupiah(Number(item.price || item.harga || 0))}
+                      </p>
                     </div>
-                  ))}
-                  {cart.length === 0 && (
-                    <p className="text-center text-slate-500 text-sm py-6">Keranjang masih kosong</p>
-                  )}
-                </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => updateCartQty(item.id, -1)}
+                        className="w-6 h-6 rounded-lg bg-rose-100 hover:bg-rose-200 text-rose-600 font-bold text-xs flex items-center justify-center"
+                      >
+                        -
+                      </button>
+                      <span className="font-bold text-xs w-5 text-center">{item.qty}</span>
+                      <button
+                        onClick={() => updateCartQty(item.id, 1)}
+                        className="w-6 h-6 rounded-lg bg-blue-100 hover:bg-blue-200 text-blue-600 font-bold text-xs flex items-center justify-center"
+                      >
+                        +
+                      </button>
+                    </div>
+                  </div>
+                ))}
 
-                {/* Summary Total */}
-                <div className="border-t border-slate-800 pt-4 mt-4 space-y-3">
-                  <div className="flex justify-between items-center text-base">
-                    <span className="text-slate-400">Total Tagihan:</span>
-                    <span className="text-xl font-extrabold text-amber-400">{formatRupiah(cartTotal)}</span>
+                {cart.length === 0 && (
+                  <div className="text-center py-6 border border-dashed border-slate-200 rounded-xl">
+                    <p className="text-xs text-slate-400">Keranjang masih kosong</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Total Tagihan */}
+              <div className="pt-2 border-t border-slate-100 flex justify-between items-center">
+                <span className="text-base font-extrabold text-slate-800">Total Tagihan:</span>
+                <span className="text-2xl font-black text-blue-600">{formatRupiah(totalTagihan)}</span>
+              </div>
+
+              {/* Pilihan Metode Bayar */}
+              <div className="grid grid-cols-2 gap-2 bg-slate-100 p-1 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('Tunai')}
+                  className={`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    paymentMethod === 'Tunai' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-600'
+                  }`}
+                >
+                  💵 Tunai (Cash)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentMethod('QRIS')
+                    setUangDiterima(totalTagihan)
+                  }}
+                  className={`py-2 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-1.5 ${
+                    paymentMethod === 'QRIS' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-600'
+                  }`}
+                >
+                  📱 QRIS
+                </button>
+              </div>
+
+              {paymentMethod === 'Tunai' && (
+                <div className="space-y-3">
+                  {/* Tombol Cepat Uang */}
+                  <div>
+                    <div className="flex justify-between items-center mb-1.5">
+                      <span className="text-[11px] font-bold text-slate-600">Tambah Pecahan Uang:</span>
+                      <button
+                        type="button"
+                        onClick={() => setUangDiterima(0)}
+                        className="text-[11px] text-rose-500 font-bold hover:underline flex items-center gap-1"
+                      >
+                        🔄 Reset (0)
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setUangDiterima(totalTagihan)}
+                        className="py-2 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-700 font-bold rounded-xl text-xs"
+                      >
+                        💵 Uang Pas
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUangDiterima((prev) => prev + 10000)}
+                        className="py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs"
+                      >
+                        + 10.000
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUangDiterima((prev) => prev + 20000)}
+                        className="py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs"
+                      >
+                        + 20.000
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUangDiterima((prev) => prev + 50000)}
+                        className="py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs"
+                      >
+                        + 50.000
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUangDiterima((prev) => prev + 100000)}
+                        className="py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs"
+                      >
+                        + 100.000
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setUangDiterima((prev) => prev + 1000)}
+                        className="py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-xl text-xs"
+                      >
+                        + 1.000
+                      </button>
+                    </div>
                   </div>
 
-                  {/* Input Uang Tunai Diterima */}
+                  {/* Input Uang Diterima */}
                   <div>
-                    <label className="text-xs font-semibold text-slate-300 block mb-1">Uang Diterima Kasir:</label>
+                    <label className="text-xs font-bold text-slate-700 block mb-1">Uang Diterima (Rp):</label>
                     <input
                       type="number"
-                      value={posCashReceived || ''}
-                      onChange={(e) => setPosCashReceived(Number(e.target.value))}
-                      placeholder="Masukkan nominal..."
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-white font-bold text-lg focus:outline-none focus:border-amber-500"
+                      value={uangDiterima || ''}
+                      onChange={(e) => setUangDiterima(Number(e.target.value))}
+                      placeholder="Masukkan nominal uang..."
+                      className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-slate-900 font-black text-xl focus:outline-none focus:border-blue-500"
                     />
-
-                    {/* Tombol Cepat Nominal */}
-                    <div className="grid grid-cols-4 gap-1.5 mt-2">
-                      <button
-                        onClick={() => setPosCashReceived(cartTotal)}
-                        className="py-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 rounded-lg text-xs font-semibold"
-                      >
-                        Pas
-                      </button>
-                      <button
-                        onClick={() => setPosCashReceived(prev => prev + 20000)}
-                        className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold"
-                      >
-                        +20k
-                      </button>
-                      <button
-                        onClick={() => setPosCashReceived(prev => prev + 50000)}
-                        className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold"
-                      >
-                        +50k
-                      </button>
-                      <button
-                        onClick={() => setPosCashReceived(prev => prev + 100000)}
-                        className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold"
-                      >
-                        +100k
-                      </button>
-                    </div>
                   </div>
 
-                  {/* Uang Kembalian */}
-                  <div className="bg-slate-950 p-3 rounded-xl border border-slate-800 flex justify-between items-center">
-                    <span className="text-xs text-slate-400">Kembalian:</span>
-                    <span className={`text-base font-bold ${posKembalian >= 0 ? 'text-emerald-400' : 'text-rose-500'}`}>
-                      {formatRupiah(posKembalian)}
+                  {/* Badge Terbilang */}
+                  {uangDiterima > 0 && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl px-3 py-2 text-xs text-blue-700 font-medium italic flex items-center gap-1.5">
+                      <span>🔔</span>
+                      <span>Terbilang: {terbilang(uangDiterima)}</span>
+                    </div>
+                  )}
+
+                  {/* Kotak Kembalian Real-Time */}
+                  <div className="bg-slate-50 border border-slate-300 p-3 rounded-xl flex justify-between items-center">
+                    <span className="text-xs font-bold text-slate-600">Kembalian:</span>
+                    <span className={`text-lg font-black ${kembalian > 0 ? 'text-emerald-600' : 'text-slate-800'}`}>
+                      {formatRupiah(kembalian)}
                     </span>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Tombol Checkout POS (2 Opsi) */}
-              <div className="grid grid-cols-2 gap-2 mt-4">
+              {/* 2 Opsi Tombol Selesai */}
+              <div className="grid grid-cols-2 gap-2 pt-2">
                 <button
-                  onClick={() => handlePosCheckout(false)}
-                  disabled={cart.length === 0 || posCashReceived < cartTotal}
-                  className="py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white font-bold rounded-xl text-xs transition-all shadow"
+                  type="button"
+                  onClick={() => handleCheckoutPOS(false)}
+                  disabled={cart.length === 0 || (paymentMethod === 'Tunai' && uangDiterima < totalTagihan)}
+                  className="py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition-all shadow"
                 >
-                  ✓ Selesai Saja
+                  ✓ Bayar & Selesai
+                  <span className="block text-[10px] font-normal opacity-80">(Tanpa Struk)</span>
                 </button>
+
                 <button
-                  onClick={() => handlePosCheckout(true)}
-                  disabled={cart.length === 0 || posCashReceived < cartTotal}
-                  className="py-3 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs transition-all shadow flex items-center justify-center gap-1"
+                  type="button"
+                  onClick={() => handleCheckoutPOS(true)}
+                  disabled={cart.length === 0 || (paymentMethod === 'Tunai' && uangDiterima < totalTagihan)}
+                  className="py-3.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs transition-all shadow flex flex-col items-center justify-center"
                 >
-                  🧾 Selesai & Struk
+                  <span>Bayar & Cetak Struk 📄</span>
+                  <span className="text-[10px] font-normal opacity-80">(Bluetooth / Print)</span>
                 </button>
               </div>
             </div>
           </div>
         )}
 
+        {/* ================= TAB 2: DAFTAR ANTRIAN & PESANAN MASUK ================= */}
+        {activeTab === 'orders' && (
+          <div className="space-y-4">
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">Antrean Pesanan Masuk</h2>
+                <p className="text-xs text-slate-500">Kelola status dan terima pembayaran pesanan pelanggan</p>
+              </div>
+              <button
+                onClick={fetchData}
+                className="px-4 py-2 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-700 hover:bg-slate-50"
+              >
+                🔄 Refresh
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {orders
+                .filter((o) => o.status !== 'Lunas' && o.status !== 'Selesai')
+                .map((order) => (
+                  <div key={order.id} className="bg-white border border-slate-200 rounded-3xl p-5 shadow-md flex flex-col justify-between">
+                    <div>
+                      <div className="flex justify-between items-start mb-2">
+                        <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                          Meja: {order.table_number || '-'}
+                        </span>
+                        <span className="text-[11px] text-slate-400">
+                          {new Date(order.created_at).toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </div>
+                      <h4 className="font-extrabold text-slate-900 text-base">{order.customer_name || 'Pelanggan'}</h4>
+
+                      {/* Items */}
+                      <div className="divide-y divide-slate-100 my-3 py-2 border-y border-slate-100 text-xs space-y-1.5">
+                        {order.order_items?.map((item: any, idx: number) => (
+                          <div key={idx} className="flex justify-between pt-1">
+                            <span className="text-slate-700">
+                              {item.quantity}× {item.menu_items?.name || 'Item'}
+                            </span>
+                            <span className="font-bold text-slate-900">
+                              {formatRupiah(Number(item.price_per_unit || 0) * item.quantity)}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex justify-between items-center mb-3">
+                        <span className="text-xs font-bold text-slate-500">Total Tagihan:</span>
+                        <span className="text-lg font-black text-blue-600">{formatRupiah(order.total_amount)}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => openPayOrderModal(order)}
+                      className="w-full py-3 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white font-bold rounded-2xl text-xs shadow"
+                    >
+                      💵 Bayar / Selesaikan Pesanan
+                    </button>
+                  </div>
+                ))}
+
+              {orders.filter((o) => o.status !== 'Lunas' && o.status !== 'Selesai').length === 0 && (
+                <div className="col-span-full py-16 text-center bg-white rounded-3xl border border-dashed border-slate-200">
+                  <p className="text-sm text-slate-400">Tidak ada antrean pesanan yang belum lunas. 🎉</p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {/* ================= TAB 3: RIWAYAT TRANSAKSI ================= */}
         {activeTab === 'history' && (
-          <div>
-            <h2 className="text-xl font-bold text-white mb-4">Semua Riwayat Transaksi</h2>
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
-              <table className="w-full text-left text-sm text-slate-300">
-                <thead className="bg-slate-950 text-slate-400 border-b border-slate-800">
+          <div className="bg-white border border-slate-200 rounded-3xl p-5 shadow-md">
+            <h3 className="font-bold text-lg text-slate-800 mb-4">Riwayat Semua Transaksi</h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-700">
+                <thead className="bg-slate-50 border-b border-slate-200 font-bold text-slate-600">
                   <tr>
-                    <th className="p-4">Waktu</th>
-                    <th className="p-4">Pelanggan</th>
-                    <th className="p-4">Meja</th>
-                    <th className="p-4">Total</th>
-                    <th className="p-4">Status</th>
-                    <th className="p-4 text-center">Aksi</th>
+                    <th className="p-3">Waktu</th>
+                    <th className="p-3">Pelanggan</th>
+                    <th className="p-3">Meja</th>
+                    <th className="p-3">Total</th>
+                    <th className="p-3">Metode</th>
+                    <th className="p-3">Status</th>
+                    <th className="p-3 text-center">Aksi</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-800">
+                <tbody className="divide-y divide-slate-100">
                   {orders.map((order) => (
-                    <tr key={order.id} className="hover:bg-slate-800/40">
-                      <td className="p-4 text-slate-400">
+                    <tr key={order.id} className="hover:bg-slate-50">
+                      <td className="p-3 text-slate-500">
                         {new Date(order.created_at).toLocaleString('id-ID', { dateStyle: 'short', timeStyle: 'short' })}
                       </td>
-                      <td className="p-4 font-semibold text-white">{order.customer_name || '-'}</td>
-                      <td className="p-4">{order.table_number || '-'}</td>
-                      <td className="p-4 font-bold text-amber-400">{formatRupiah(order.total_amount)}</td>
-                      <td className="p-4">
-                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold ${
-                          order.status === 'Lunas' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                        }`}>
-                          {order.status || 'Menunggu'}
+                      <td className="p-3 font-bold text-slate-900">{order.customer_name || '-'}</td>
+                      <td className="p-3">{order.table_number || '-'}</td>
+                      <td className="p-3 font-extrabold text-blue-600">{formatRupiah(order.total_amount)}</td>
+                      <td className="p-3">{order.payment_method || 'Tunai'}</td>
+                      <td className="p-3">
+                        <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                          {order.status || 'Lunas'}
                         </span>
                       </td>
-                      <td className="p-4 text-center">
+                      <td className="p-3 text-center">
                         <button
                           onClick={() => setReceiptOrder(order)}
-                          className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-medium rounded-lg text-slate-200"
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg font-bold text-[11px]"
                         >
-                          🧾 Cetak Ulang Struk
+                          🧾 Cetak Ulang
                         </button>
                       </td>
                     </tr>
@@ -745,132 +792,131 @@ export default function KasirDashboard() {
         )}
       </main>
 
-      {/* ================= MODAL PEMBAYARAN DARI RIWAYAT ================= */}
+      {/* ================= MODAL BAYAR PESANAN DARI RIWAYAT ================= */}
       {payingOrder && (
-        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-5">
-            {/* Header Modal */}
-            <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <div>
-                <h3 className="font-bold text-xl text-white">Pembayaran Pesanan</h3>
-                <p className="text-xs text-slate-400">
-                  Meja {payingOrder.table_number || '-'} • {payingOrder.customer_name || 'Pelanggan'}
+                <h3 className="font-black text-lg text-slate-900">Pembayaran Pesanan</h3>
+                <p className="text-xs text-slate-500">
+                  Meja: {payingOrder.table_number || '-'} • {payingOrder.customer_name || 'Pelanggan'}
                 </p>
               </div>
               <button
                 onClick={() => setPayingOrder(null)}
-                className="w-8 h-8 rounded-full bg-slate-800 text-slate-400 hover:text-white flex items-center justify-center text-sm font-bold"
+                className="w-8 h-8 rounded-full bg-slate-100 text-slate-500 hover:bg-slate-200 flex items-center justify-center font-bold text-sm"
               >
                 ✕
               </button>
             </div>
 
-            {/* Rincian Tagihan */}
-            <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+            {/* Total Tagihan */}
+            <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
               <div className="flex justify-between items-center">
-                <span className="text-slate-400 text-sm">Total Tagihan:</span>
-                <span className="text-2xl font-black text-amber-400">{formatRupiah(payingTotal)}</span>
+                <span className="text-xs font-bold text-slate-600">Total Tagihan:</span>
+                <span className="text-2xl font-black text-blue-600">{formatRupiah(payingOrderTotal)}</span>
               </div>
-              <p className="text-xs text-slate-500 mt-1 italic">{terbilang(payingTotal)}</p>
+              <p className="text-[11px] text-slate-500 mt-1 italic">{terbilang(payingOrderTotal)}</p>
             </div>
 
-            {/* Input Uang Kasir & Kalkulator Kembalian */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-300">Uang Diterima Kasir (Rp):</label>
+            {/* Input Nominal Diterima */}
+            <div>
+              <label className="text-xs font-bold text-slate-700 block mb-1">Uang Diterima (Rp):</label>
               <input
                 type="number"
                 value={payingCash || ''}
                 onChange={(e) => setPayingCash(Number(e.target.value))}
-                placeholder="Masukkan nominal uang..."
-                className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-xl font-bold text-white focus:outline-none focus:border-amber-500"
+                placeholder="Nominal uang..."
+                className="w-full bg-slate-50 border border-slate-300 rounded-xl px-4 py-2.5 text-xl font-black text-slate-900 focus:outline-none focus:border-blue-500"
                 autoFocus
               />
 
-              {/* Tombol Cepat Penambahan Uang */}
-              <div className="grid grid-cols-3 gap-2 pt-1">
+              {/* Tombol Cepat */}
+              <div className="grid grid-cols-3 gap-1.5 mt-2">
                 <button
                   type="button"
-                  onClick={() => setPayingCash(payingTotal)}
-                  className="py-2 bg-amber-500/20 border border-amber-500/40 text-amber-300 rounded-xl text-xs font-bold hover:bg-amber-500/30"
+                  onClick={() => setPayingCash(payingOrderTotal)}
+                  className="py-1.5 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-700 font-bold rounded-lg text-xs"
                 >
                   Uang Pas
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPayingCash(prev => prev + 20000)}
-                  className="py-2 bg-slate-800 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-700"
+                  onClick={() => setPayingCash((prev) => prev + 20000)}
+                  className="py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-xs"
                 >
-                  +20.000
+                  + 20.000
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPayingCash(prev => prev + 50000)}
-                  className="py-2 bg-slate-800 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-700"
+                  onClick={() => setPayingCash((prev) => prev + 50000)}
+                  className="py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-xs"
                 >
-                  +50.000
+                  + 50.000
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPayingCash(prev => prev + 100000)}
-                  className="py-2 bg-slate-800 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-700"
+                  onClick={() => setPayingCash((prev) => prev + 100000)}
+                  className="py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-xs"
                 >
-                  +100.000
+                  + 100.000
                 </button>
                 <button
                   type="button"
                   onClick={() => setPayingCash(100000)}
-                  className="py-2 bg-slate-800 border border-slate-700 text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-700"
+                  className="py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-lg text-xs"
                 >
                   Pas 100k
                 </button>
                 <button
                   type="button"
                   onClick={() => setPayingCash(0)}
-                  className="py-2 bg-rose-500/20 border border-rose-500/40 text-rose-400 rounded-xl text-xs font-bold hover:bg-rose-500/30"
+                  className="py-1.5 bg-rose-50 hover:bg-rose-100 border border-rose-200 text-rose-600 font-bold rounded-lg text-xs"
                 >
                   Reset
                 </button>
               </div>
             </div>
 
-            {/* Kotak Uang Kembalian Real-Time */}
-            <div className={`p-4 rounded-2xl border ${
-              payingCash >= payingTotal
-                ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-400'
-                : 'bg-rose-950/40 border-rose-500/40 text-rose-400'
-            }`}>
+            {/* Kotak Kembalian Real-Time */}
+            <div
+              className={`p-3.5 rounded-2xl border ${
+                payingCash >= payingOrderTotal
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                  : 'bg-rose-50 border-rose-200 text-rose-700'
+              }`}
+            >
               <div className="flex justify-between items-center">
-                <span className="text-xs font-semibold text-slate-300">Uang Kembalian:</span>
-                <span className="text-2xl font-black">{formatRupiah(payingKembalian)}</span>
+                <span className="text-xs font-bold">Uang Kembalian:</span>
+                <span className="text-xl font-black">{formatRupiah(payingOrderChange)}</span>
               </div>
-              {payingCash >= payingTotal && (
-                <p className="text-xs text-emerald-300/80 mt-1 italic">{terbilang(payingKembalian)}</p>
+              {payingCash >= payingOrderTotal && (
+                <p className="text-[11px] text-emerald-600 mt-1 italic">{terbilang(payingOrderChange)}</p>
               )}
-              {payingCash < payingTotal && (
-                <p className="text-xs text-rose-400 mt-1">Uang kurang: {formatRupiah(payingTotal - payingCash)}</p>
+              {payingCash < payingOrderTotal && (
+                <p className="text-[11px] text-rose-600 mt-1">Uang kurang: {formatRupiah(payingOrderTotal - payingCash)}</p>
               )}
             </div>
 
-            {/* 2 Opsi Tombol Selesai */}
-            <div className="grid grid-cols-2 gap-3 pt-2">
+            {/* Tombol Selesai / Struk */}
+            <div className="grid grid-cols-2 gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => handleCompletePayment(false)}
-                disabled={payingCash < payingTotal}
-                className="py-3.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold rounded-xl text-sm transition-all shadow-lg flex flex-col items-center justify-center"
+                onClick={() => handleCompleteOrderPayment(false)}
+                disabled={payingCash < payingOrderTotal}
+                className="py-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs shadow"
               >
-                <span>✓ Selesai</span>
-                <span className="text-[10px] font-normal opacity-80">(Tanpa Struk)</span>
+                ✓ Selesai Saja
               </button>
 
               <button
                 type="button"
-                onClick={() => handleCompletePayment(true)}
-                disabled={payingCash < payingTotal}
-                className="py-3.5 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 disabled:opacity-40 text-slate-950 font-bold rounded-xl text-sm transition-all shadow-lg flex flex-col items-center justify-center"
+                onClick={() => handleCompleteOrderPayment(true)}
+                disabled={payingCash < payingOrderTotal}
+                className="py-3 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white font-bold rounded-xl text-xs shadow"
               >
-                <span>🧾 Selesaikan</span>
-                <span className="text-[10px] font-normal opacity-90">& Cetak Struk</span>
+                🧾 Selesai & Cetak Struk
               </button>
             </div>
           </div>
@@ -879,17 +925,17 @@ export default function KasirDashboard() {
 
       {/* ================= MODAL CETAK STRUK ================= */}
       {receiptOrder && (
-        <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl max-w-sm w-full p-6 shadow-2xl">
-            {/* Tampilan Struk */}
-            <div className="bg-white text-black p-5 rounded-2xl font-mono text-xs shadow-inner mb-5">
+        <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            {/* Template Struk */}
+            <div className="bg-slate-50 border border-slate-200 p-5 rounded-2xl font-mono text-xs text-slate-800">
               <div className="text-center mb-3">
-                <h4 className="font-bold text-base">WARUNG KOPI / KASIR</h4>
-                <p className="text-[10px] text-gray-600">Jl. Utama No. 123 • Telp: 0812-xxxx</p>
-                <div className="border-b border-dashed border-gray-400 my-2"></div>
+                <h4 className="font-extrabold text-sm">WARUNG KOPI / KASIR</h4>
+                <p className="text-[10px] text-slate-500">Struk Pembayaran Sah</p>
+                <div className="border-b border-dashed border-slate-300 my-2"></div>
               </div>
 
-              <div className="space-y-1 mb-2">
+              <div className="space-y-1 mb-2 text-[11px]">
                 <div className="flex justify-between">
                   <span>Meja:</span>
                   <span className="font-bold">{receiptOrder.table_number || '-'}</span>
@@ -904,63 +950,66 @@ export default function KasirDashboard() {
                 </div>
               </div>
 
-              <div className="border-b border-dashed border-gray-400 my-2"></div>
+              <div className="border-b border-dashed border-slate-300 my-2"></div>
 
-              {/* Items */}
               <div className="space-y-1.5 my-2">
                 {receiptOrder.order_items?.map((item: any, idx: number) => (
                   <div key={idx}>
-                    <div className="font-semibold">{item.menu_items?.name || 'Item'}</div>
-                    <div className="flex justify-between text-gray-600">
-                      <span>{item.quantity} x {formatRupiah(Number(item.price_per_unit || 0))}</span>
-                      <span className="font-bold text-black">{formatRupiah(Number(item.price_per_unit || 0) * item.quantity)}</span>
+                    <div className="font-semibold text-slate-900">{item.menu_items?.name || item.name || 'Item'}</div>
+                    <div className="flex justify-between text-slate-500 text-[11px]">
+                      <span>
+                        {item.quantity || item.qty} × {formatRupiah(Number(item.price_per_unit || item.price || 0))}
+                      </span>
+                      <span className="font-bold text-slate-900">
+                        {formatRupiah((item.quantity || item.qty) * Number(item.price_per_unit || item.price || 0))}
+                      </span>
                     </div>
                   </div>
                 ))}
               </div>
 
-              <div className="border-b border-dashed border-gray-400 my-2"></div>
+              <div className="border-b border-dashed border-slate-300 my-2"></div>
 
               <div className="space-y-1 font-bold">
-                <div className="flex justify-between text-sm">
+                <div className="flex justify-between text-sm text-slate-900">
                   <span>TOTAL:</span>
                   <span>{formatRupiah(receiptOrder.total_amount)}</span>
                 </div>
-                <div className="flex justify-between font-normal text-gray-700">
+                <div className="flex justify-between font-normal text-slate-600">
                   <span>Tunai:</span>
                   <span>{formatRupiah(receiptOrder.cash_received || receiptOrder.total_amount)}</span>
                 </div>
-                <div className="flex justify-between font-normal text-gray-700">
+                <div className="flex justify-between font-normal text-slate-600">
                   <span>Kembalian:</span>
                   <span>{formatRupiah(receiptOrder.change_amount || 0)}</span>
                 </div>
               </div>
 
-              <div className="text-center mt-4 pt-2 border-t border-dashed border-gray-400 text-[10px] text-gray-600">
+              <div className="text-center mt-4 pt-2 border-t border-dashed border-slate-300 text-[10px] text-slate-500">
                 Terima Kasih Atas Kunjungan Anda!
               </div>
             </div>
 
-            {/* Action Buttons Cetak */}
+            {/* Tombol Cetak */}
             <div className="space-y-2">
               <button
-                onClick={printViaBluetooth}
+                onClick={printBluetooth}
                 disabled={isPrintingBluetooth}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-sm shadow flex items-center justify-center gap-2"
+                className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl text-xs shadow flex items-center justify-center gap-2"
               >
                 📶 {isPrintingBluetooth ? 'Menghubungkan...' : 'Cetak via Bluetooth Thermal'}
               </button>
-              
+
               <button
-                onClick={printStandard}
-                className="w-full py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold rounded-xl text-xs"
+                onClick={() => window.print()}
+                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs"
               >
-                🖨️ Cetak Standar / PDF
+                🖨️ Cetak Standar / Simpan PDF
               </button>
 
               <button
                 onClick={() => setReceiptOrder(null)}
-                className="w-full py-2.5 bg-transparent hover:bg-slate-800 text-slate-400 text-xs font-semibold rounded-xl"
+                className="w-full py-2 text-slate-400 hover:text-slate-600 text-xs font-semibold"
               >
                 Tutup
               </button>

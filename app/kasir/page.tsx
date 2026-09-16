@@ -44,7 +44,7 @@ interface LastReceipt {
 
 // ==========================================
 // 🔑 GANTI PIN KASIR KAMU DI BAWAH INI:
-const CASHIER_PIN = 'd1itsme'; // Silakan ganti dengan PIN yang kamu inginkan
+const CASHIER_PIN = '1234'; // Silakan ganti dengan PIN yang kamu inginkan
 // ==========================================
 
 function terbilangIndonesia(nominal: number): string {

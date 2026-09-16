@@ -50,6 +50,7 @@ interface LastReceipt {
 const CASHIER_PIN = '1234'; 
 // ==========================================
 
+// Fungsi Suara Bel Notifikasi
 function playNotificationSound() {
   try {
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -79,6 +80,7 @@ function playNotificationSound() {
   }
 }
 
+// Fungsi Terbilang Bahasa Indonesia
 function terbilangIndonesia(nominal: number): string {
   if (nominal <= 0) return 'Nol Rupiah';
   const satuan = ['', 'Satu', 'Dua', 'Tiga', 'Empat', 'Lima', 'Enam', 'Tujuh', 'Delapan', 'Sembilan', 'Sepuluh', 'Sebelas'];
@@ -98,6 +100,96 @@ function terbilangIndonesia(nominal: number): string {
 
   const hasil = konversi(Math.floor(nominal)).replace(/\s+/g, ' ').trim();
   return hasil ? `${hasil} Rupiah` : '';
+}
+
+// ==============================================================
+// 🖨️ FUNGSI CETAK KE PRINTER THERMAL BLUETOOTH (ESC/POS)
+// ==============================================================
+async function printViaBluetooth(receipt: LastReceipt) {
+  if (typeof navigator === 'undefined' || !('bluetooth' in navigator)) {
+    alert('Browser ini tidak mendukung Web Bluetooth. Silakan gunakan Google Chrome atau Microsoft Edge!');
+    return;
+  }
+
+  try {
+    // 1. Minta Izin Hubungkan ke Perangkat Bluetooth
+    const device = await (navigator as any).bluetooth.requestDevice({
+      acceptAllDevices: true,
+      optionalServices: [
+        '000018f0-0000-1000-8000-00805f9b34fb',
+        'e7810a71-73ae-499d-8c15-faa9aef0c3f2',
+        '0000ffe0-0000-1000-8000-00805f9b34fb',
+        '49535343-fe7d-4ae5-8fa9-9fafd205e455',
+      ],
+    });
+
+    const server = await device.gatt?.connect();
+    let characteristic: any = null;
+
+    // Cari karakteristik bluetooth yang bisa menulis data
+    const services = await server?.getPrimaryServices();
+    if (services) {
+      for (const service of services) {
+        const characteristics = await service.getCharacteristics();
+        for (const char of characteristics) {
+          if (char.properties.write || char.properties.writeWithoutResponse) {
+            characteristic = char;
+            break;
+          }
+        }
+        if (characteristic) break;
+      }
+    }
+
+    if (!characteristic) {
+      alert('Tidak dapat menemukan jalur pengiriman data pada printer Bluetooth ini.');
+      return;
+    }
+
+    // Format Struk Thermal ESC/POS
+    let text = '';
+    text += '\x1B\x40'; // Inisialisasi printer
+    text += '\x1B\x61\x01'; // Rata Tengah (Center)
+    text += 'KASIR KITA\n';
+    text += 'Sistem Kasir & POS Online\n';
+    text += '================================\n';
+    text += `No: ${receipt.invoiceNumber}\n`;
+    text += `Tgl: ${receipt.date}\n`;
+    text += `Pelanggan: ${receipt.customerName}\n`;
+    text += `Metode: ${receipt.paymentMethod}\n`;
+    text += '--------------------------------\n';
+    text += '\x1B\x61\x00'; // Rata Kiri
+
+    receipt.items.forEach((item) => {
+      text += `${item.name}\n`;
+      text += `  ${item.quantity} x Rp ${item.price.toLocaleString('id-ID')} = Rp ${(item.price * item.quantity).toLocaleString('id-ID')}\n`;
+    });
+
+    text += '--------------------------------\n';
+    text += `Total     : Rp ${receipt.totalAmount.toLocaleString('id-ID')}\n`;
+    text += `Dibayar   : Rp ${receipt.cashReceived.toLocaleString('id-ID')}\n`;
+    text += `Kembalian : Rp ${receipt.changeReturned.toLocaleString('id-ID')}\n`;
+    text += '================================\n';
+    text += '\x1B\x61\x01'; // Rata Tengah
+    text += 'Terima Kasih Atas Kunjungan Anda!\n';
+    text += 'Selamat Menikmati :)\n\n\n\n'; // Feed kertas
+
+    // Kirim data byte ke printer
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+
+    const CHUNK_SIZE = 512;
+    for (let i = 0; i < data.length; i += CHUNK_SIZE) {
+      const chunk = data.slice(i, i + CHUNK_SIZE);
+      await characteristic.writeValue(chunk);
+    }
+
+    alert('Struk berhasil dikirim dan dicetak ke Printer Bluetooth!');
+  } catch (err: any) {
+    if (err.name !== 'NotFoundError') {
+      alert('Koneksi Bluetooth dibatalkan: ' + err.message);
+    }
+  }
 }
 
 export default function KasirPanelPage() {
@@ -302,7 +394,7 @@ export default function KasirPanelPage() {
     fetchTodayHistory();
   }
 
-  // ================= BAYAR DARI DAFTAR RIWAYAT =================
+  // Bayar dari Daftar Riwayat
   async function handleSelesaikanBayarRiwayat() {
     if (!payingOrder) return;
     const orderTotal = Number(payingOrder.total_amount);
@@ -315,7 +407,6 @@ export default function KasirPanelPage() {
     const finalCash = payingMethod === 'QRIS' ? orderTotal : payingCash;
     const finalChange = payingMethod === 'QRIS' ? 0 : payingCash - orderTotal;
 
-    // Update Status Transaksi di Supabase menjadi Lunas
     const { error } = await supabase
       .from('transactions')
       .update({
@@ -331,7 +422,6 @@ export default function KasirPanelPage() {
       return;
     }
 
-    // Tampilkan Struk
     setLastReceipt({
       invoiceNumber: payingOrder.invoice_number,
       customerName: payingOrder.customer_name,
@@ -450,9 +540,8 @@ export default function KasirPanelPage() {
         </div>
       </header>
 
-      {/* Konten Utama */}
+      {/* Konten Kasir */}
       <div className="flex-1 flex overflow-hidden">
-        {/* ================= TAB 1: POS KASIR ================= */}
         {activeTab === 'pos' && (
           <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
             <div className="flex-1 p-6 overflow-y-auto">
@@ -494,7 +583,7 @@ export default function KasirPanelPage() {
               </div>
             </div>
 
-            {/* Panel Checkout POS */}
+            {/* Panel Checkout Kasir */}
             <div className="w-full md:w-[440px] bg-white p-6 shadow-2xl border-l flex flex-col justify-between overflow-y-auto">
               <div>
                 <h2 className="text-lg font-bold border-b pb-3 mb-3">Transaksi Kasir</h2>
@@ -637,7 +726,7 @@ export default function KasirPanelPage() {
           </div>
         )}
 
-        {/* ================= TAB 2: RIWAYAT & BAYAR DARI DAFTAR ================= */}
+        {/* TAB RIWAYAT */}
         {activeTab === 'riwayat' && (
           <div className="flex-1 p-6 overflow-y-auto max-w-5xl mx-auto w-full space-y-6">
             <div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm">
@@ -662,7 +751,6 @@ export default function KasirPanelPage() {
               </div>
             </div>
 
-            {/* DAFTAR TRANSAKSI DENGAN STATUS & TOMBOL BAYAR */}
             <div className="space-y-4">
               {historyList.map((tx) => {
                 const isPaid = tx.status === 'Lunas' || Number(tx.cash_received) > 0;
@@ -677,7 +765,6 @@ export default function KasirPanelPage() {
                             👤 {tx.customer_name}
                           </span>
                           
-                          {/* STATUS BADGE: LUNAS ATAU BELUM DIBAYAR */}
                           {isPaid ? (
                             <span className="bg-emerald-100 text-emerald-700 text-xs px-2.5 py-0.5 rounded-md font-extrabold flex items-center gap-1">
                               🟢 LUNAS ({tx.payment_method || 'Tunai'})
@@ -698,7 +785,6 @@ export default function KasirPanelPage() {
                       </div>
                     </div>
 
-                    {/* Rincian Menu */}
                     <div className="bg-slate-50 p-3 rounded-xl text-xs space-y-1">
                       {tx.transaction_items?.map((item) => (
                         <div key={item.id} className="flex justify-between text-slate-600 font-medium">
@@ -708,7 +794,6 @@ export default function KasirPanelPage() {
                       ))}
                     </div>
 
-                    {/* Tombol Aksi: Bayar Sekarang (Jika Belum Lunas) atau Cetak Struk (Jika Lunas) */}
                     <div className="flex justify-end gap-2 pt-1">
                       {!isPaid ? (
                         <button
@@ -753,7 +838,7 @@ export default function KasirPanelPage() {
         )}
       </div>
 
-      {/* ================= MODAL POP-UP KALKULATOR BAYAR DARI RIWAYAT ================= */}
+      {/* POP-UP KALKULATOR BAYAR DARI RIWAYAT */}
       {payingOrder && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-6 max-w-lg w-full shadow-2xl space-y-4">
@@ -770,7 +855,6 @@ export default function KasirPanelPage() {
               <span className="text-2xl font-black text-blue-700">Rp {Number(payingOrder.total_amount).toLocaleString('id-ID')}</span>
             </div>
 
-            {/* Metode Bayar */}
             <div className="flex gap-2 bg-slate-100 p-1 rounded-xl border">
               <button
                 type="button"
@@ -851,14 +935,14 @@ export default function KasirPanelPage() {
                 onClick={handleSelesaikanBayarRiwayat}
                 className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs shadow-lg shadow-emerald-200 transition"
               >
-                Selesaikan Pembayaran & Cetak Struk 🧾
+                Selesaikan & Cetak Struk 🧾
               </button>
             </div>
           </div>
         </div>
       )}
 
-      {/* ================= MODAL STRUK PEMBAYARAN ================= */}
+      {/* ================= MODAL STRUK CETAK DENGAN DUA PILIHAN ================= */}
       {lastReceipt && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
@@ -876,7 +960,7 @@ export default function KasirPanelPage() {
               </div>
             </div>
 
-            <div className="space-y-2 max-h-48 overflow-y-auto text-sm border-b pb-4">
+            <div className="space-y-2 max-h-44 overflow-y-auto text-sm border-b pb-4">
               {lastReceipt.items.map((item, index) => (
                 <div key={index} className="flex justify-between items-center text-slate-700">
                   <span>{item.name} ×{item.quantity}</span>
@@ -891,9 +975,29 @@ export default function KasirPanelPage() {
               <div className="flex justify-between font-extrabold text-emerald-600 border-t pt-1"><span>Kembalian:</span><span>Rp {lastReceipt.changeReturned.toLocaleString('id-ID')}</span></div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 pt-2">
-              <button onClick={() => window.print()} className="w-full py-2.5 bg-slate-100 text-slate-700 rounded-xl font-bold text-sm">🖨️ Cetak Struk</button>
-              <button onClick={() => setLastReceipt(null)} className="w-full py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm">Tutup</button>
+            {/* DUA TOMBOL CETAK: BLUETOOTH & BIASA */}
+            <div className="space-y-2 pt-2">
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => printViaBluetooth(lastReceipt)}
+                  className="w-full py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-xs shadow-md shadow-blue-200 transition flex items-center justify-center gap-1"
+                >
+                  📶 Cetak Bluetooth
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl font-bold text-xs transition flex items-center justify-center gap-1"
+                >
+                  🖨️ Cetak Biasa / PDF
+                </button>
+              </div>
+
+              <button
+                onClick={() => setLastReceipt(null)}
+                className="w-full py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-xl font-bold text-xs transition"
+              >
+                Tutup
+              </button>
             </div>
           </div>
         </div>

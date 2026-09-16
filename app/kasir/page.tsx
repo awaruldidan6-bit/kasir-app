@@ -1,5 +1,5 @@
 'use client';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import Link from 'next/link';
 
@@ -22,6 +22,7 @@ interface TransactionHistory {
   total_amount: number;
   cash_received: number;
   change_returned: number;
+  payment_method: string;
   created_at: string;
   transaction_items?: {
     id: number;
@@ -39,13 +40,47 @@ interface LastReceipt {
   totalAmount: number;
   cashReceived: number;
   changeReturned: number;
+  paymentMethod: string;
   date: string;
 }
 
 // ==========================================
 // 🔑 GANTI PIN KASIR KAMU DI BAWAH INI:
-const CASHIER_PIN = '1234'; // Silakan ganti dengan PIN yang kamu inginkan
+const CASHIER_PIN = 'd1itsme'; 
 // ==========================================
+
+// Fungsi Suara Bel Notifikasi (Ding-Dong / Ting-Tung)
+function playNotificationSound() {
+  try {
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    // Nada Pertama (Ting)
+    const osc1 = audioCtx.createOscillator();
+    const gain1 = audioCtx.createGain();
+    osc1.type = 'sine';
+    osc1.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
+    gain1.gain.setValueAtTime(0.4, audioCtx.currentTime);
+    gain1.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+    osc1.connect(gain1);
+    gain1.connect(audioCtx.destination);
+    osc1.start(audioCtx.currentTime);
+    osc1.stop(audioCtx.currentTime + 0.5);
+
+    // Nada Kedua (Tung)
+    const osc2 = audioCtx.createOscillator();
+    const gain2 = audioCtx.createGain();
+    osc2.type = 'sine';
+    osc2.frequency.setValueAtTime(880, audioCtx.currentTime + 0.18); // A5
+    gain2.gain.setValueAtTime(0.4, audioCtx.currentTime + 0.18);
+    gain2.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.9);
+    osc2.connect(gain2);
+    gain2.connect(audioCtx.destination);
+    osc2.start(audioCtx.currentTime + 0.18);
+    osc2.stop(audioCtx.currentTime + 0.9);
+  } catch (e) {
+    console.log('Audio error:', e);
+  }
+}
 
 function terbilangIndonesia(nominal: number): string {
   if (nominal <= 0) return 'Nol Rupiah';
@@ -74,6 +109,9 @@ export default function KasirPanelPage() {
   const [pinError, setPinError] = useState<string>('');
 
   const [activeTab, setActiveTab] = useState<'pos' | 'riwayat'>('pos');
+  const [paymentMethod, setPaymentMethod] = useState<'Tunai' | 'QRIS'>('Tunai');
+  const [showQrisModal, setShowQrisModal] = useState<boolean>(false);
+
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [customerName, setCustomerName] = useState<string>('');
@@ -81,11 +119,36 @@ export default function KasirPanelPage() {
   const [loading, setLoading] = useState(true);
   const [historyList, setHistoryList] = useState<TransactionHistory[]>([]);
   const [lastReceipt, setLastReceipt] = useState<LastReceipt | null>(null);
+  const [newOrderToast, setNewOrderToast] = useState<string | null>(null);
 
   useEffect(() => {
     if (isAuthenticated) {
       fetchProducts();
       fetchTodayHistory();
+
+      // Setup Notifikasi Suara Realtime dari Supabase
+      const channel = supabase
+        .channel('realtime-transactions')
+        .on(
+          'postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'transactions' },
+          (payload) => {
+            playNotificationSound();
+            setNewOrderToast(`🔔 Pesanan baru masuk dari: ${payload.new.customer_name} (Rp ${Number(payload.new.total_amount).toLocaleString('id-ID')})`);
+            fetchTodayHistory();
+            fetchProducts();
+
+            // Sembunyikan notifikasi setelah 6 detik
+            setTimeout(() => {
+              setNewOrderToast(null);
+            }, 6000);
+          }
+        )
+        .subscribe();
+
+      return () => {
+        supabase.removeChannel(channel);
+      };
     }
   }, [isAuthenticated]);
 
@@ -94,6 +157,7 @@ export default function KasirPanelPage() {
     if (pinInput === CASHIER_PIN) {
       setIsAuthenticated(true);
       setPinError('');
+      playNotificationSound(); // Tes audio saat login
     } else {
       setPinError('PIN Kasir salah! Silakan coba lagi.');
       setPinInput('');
@@ -179,10 +243,10 @@ export default function KasirPanelPage() {
   }
 
   const totalAmount = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const changeReturned = cash - totalAmount;
+  const changeReturned = paymentMethod === 'QRIS' ? 0 : cash - totalAmount;
 
   async function handleCheckout() {
-    if (cash < totalAmount) {
+    if (paymentMethod === 'Tunai' && cash < totalAmount) {
       alert('Uang pembayaran masih kurang!');
       return;
     }
@@ -190,6 +254,7 @@ export default function KasirPanelPage() {
     const finalCustomerName = customerName.trim() || 'Pelanggan Umum';
     const invoiceNumber = `INV-${Date.now()}`;
     const currentDate = new Date().toLocaleString('id-ID');
+    const finalCash = paymentMethod === 'QRIS' ? totalAmount : cash;
 
     const { data: transData, error: transError } = await supabase
       .from('transactions')
@@ -198,9 +263,9 @@ export default function KasirPanelPage() {
           invoice_number: invoiceNumber,
           customer_name: finalCustomerName,
           total_amount: totalAmount,
-          cash_received: cash,
+          cash_received: finalCash,
           change_returned: changeReturned,
-          payment_method: 'Tunai',
+          payment_method: paymentMethod,
         },
       ])
       .select()
@@ -227,11 +292,13 @@ export default function KasirPanelPage() {
       customerName: finalCustomerName,
       items: cart.map((i) => ({ name: i.name, quantity: i.quantity, price: i.price })),
       totalAmount,
-      cashReceived: cash,
+      cashReceived: finalCash,
       changeReturned,
+      paymentMethod,
       date: currentDate,
     });
 
+    setShowQrisModal(false);
     setCart([]);
     setCash(0);
     setCustomerName('');
@@ -283,9 +350,17 @@ export default function KasirPanelPage() {
     );
   }
 
-  // ================= TAMPILAN PANEL KASIR (SETELAH PIN BENAR) =================
+  // ================= TAMPILAN PANEL KASIR =================
   return (
-    <div className="flex flex-col h-screen bg-slate-100 text-slate-800 font-sans">
+    <div className="flex flex-col h-screen bg-slate-100 text-slate-800 font-sans relative">
+      {/* BANNER NOTIFIKASI REALTIME */}
+      {newOrderToast && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-6 py-3 rounded-2xl shadow-2xl font-bold text-sm flex items-center gap-3 animate-bounce">
+          <span>{newOrderToast}</span>
+          <button onClick={() => setNewOrderToast(null)} className="text-emerald-200 hover:text-white">✕</button>
+        </div>
+      )}
+
       <header className="bg-white border-b px-6 py-3.5 flex justify-between items-center shadow-sm">
         <div className="flex items-center gap-3">
           <span className="text-2xl">🏪</span>
@@ -331,7 +406,7 @@ export default function KasirPanelPage() {
       <div className="flex-1 flex overflow-hidden">
         {activeTab === 'pos' && (
           <div className="flex-1 flex flex-col md:flex-row overflow-hidden">
-            {/* Menu */}
+            {/* Katalog Menu */}
             <div className="flex-1 p-6 overflow-y-auto">
               <div className="flex justify-between items-center mb-6">
                 <div>
@@ -387,7 +462,7 @@ export default function KasirPanelPage() {
                   />
                 </div>
 
-                <div className="space-y-2 max-h-[20vh] overflow-y-auto pr-1">
+                <div className="space-y-2 max-h-[18vh] overflow-y-auto pr-1">
                   {cart.map((item) => (
                     <div key={item.id} className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border">
                       <div>
@@ -406,66 +481,119 @@ export default function KasirPanelPage() {
                 </div>
               </div>
 
-              {/* Kalkulator Uang & Terbilang */}
+              {/* Kalkulator & Metode Pembayaran (Tunai / QRIS) */}
               <div className="border-t pt-3 space-y-2.5 mt-2">
                 <div className="flex justify-between font-extrabold text-xl">
                   <span>Total Tagihan:</span>
                   <span className="text-blue-600">Rp {totalAmount.toLocaleString('id-ID')}</span>
                 </div>
 
-                <div className="space-y-1">
-                  <div className="flex justify-between items-center">
-                    <span className="text-[11px] font-bold text-slate-500">Tambah Pecahan Uang:</span>
-                    {cash > 0 && (
-                      <button onClick={() => setCash(0)} className="text-[11px] font-bold text-red-500 hover:underline">
-                        🔄 Reset (0)
-                      </button>
-                    )}
+                {/* Pilihan Metode Pembayaran */}
+                <div className="flex gap-2 bg-slate-100 p-1 rounded-xl border">
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('Tunai')}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 ${
+                      paymentMethod === 'Tunai' ? 'bg-white text-blue-700 shadow-sm' : 'text-slate-500'
+                    }`}
+                  >
+                    💵 Tunai (Cash)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('QRIS')}
+                    className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition flex items-center justify-center gap-1 ${
+                      paymentMethod === 'QRIS' ? 'bg-white text-emerald-700 shadow-sm' : 'text-slate-500'
+                    }`}
+                  >
+                    📱 QRIS / E-Wallet
+                  </button>
+                </div>
+
+                {/* JIKA MEMILIH TUNAI */}
+                {paymentMethod === 'Tunai' && (
+                  <>
+                    <div className="space-y-1">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[11px] font-bold text-slate-500">Tambah Pecahan Uang:</span>
+                        {cash > 0 && (
+                          <button onClick={() => setCash(0)} className="text-[11px] font-bold text-red-500 hover:underline">
+                            🔄 Reset (0)
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-3 gap-1.5">
+                        <button onClick={() => setCash(totalAmount)} className="px-2 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold">💵 Uang Pas</button>
+                        <button onClick={() => addCashNominal(10000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 10.000</button>
+                        <button onClick={() => addCashNominal(20000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 20.000</button>
+                        <button onClick={() => addCashNominal(50000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 50.000</button>
+                        <button onClick={() => addCashNominal(100000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 100.000</button>
+                        <button onClick={() => addCashNominal(1000)} className="px-2 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold">+ 1.000</button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="text-xs font-semibold text-slate-600">Uang Diterima (Rp):</label>
+                      <input
+                        type="number"
+                        value={cash || ''}
+                        onChange={(e) => setCash(Number(e.target.value))}
+                        placeholder="0"
+                        className="w-full p-2.5 border rounded-xl mt-1 font-black text-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                      <p className="text-[11px] font-semibold text-blue-700 bg-blue-50 p-2 rounded-lg mt-1 italic border border-blue-100">
+                        🗣️ Terbilang: <span className="font-bold">{terbilangIndonesia(cash)}</span>
+                      </p>
+                    </div>
+
+                    <div className="flex justify-between text-sm py-1 bg-slate-50 p-2 rounded-lg border">
+                      <span className="text-slate-600">Kembalian:</span>
+                      <span className={changeReturned < 0 ? 'text-red-500 font-bold' : 'text-emerald-600 font-extrabold text-base'}>
+                        Rp {changeReturned >= 0 ? changeReturned.toLocaleString('id-ID') : 0}
+                      </span>
+                    </div>
+
+                    <button
+                      onClick={handleCheckout}
+                      disabled={cart.length === 0 || totalAmount <= 0}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 rounded-xl font-bold text-base shadow-lg shadow-blue-200 disabled:bg-slate-300 disabled:shadow-none transition"
+                    >
+                      Bayar Tunai & Cetak Struk 🧾
+                    </button>
+                  </>
+                )}
+
+                {/* JIKA MEMILIH QRIS */}
+                {paymentMethod === 'QRIS' && (
+                  <div className="space-y-3 pt-1">
+                    <div className="bg-emerald-50 border border-emerald-200 p-4 rounded-2xl text-center space-y-2">
+                      <p className="text-xs font-bold text-emerald-800">Scan QRIS untuk Membayar</p>
+                      <div className="bg-white p-3 rounded-xl inline-block shadow-sm border border-emerald-100">
+                        {/* Gambar QRIS Dinamis */}
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=160x160&data=KASIRKITA-QRIS-${totalAmount}`}
+                          alt="QRIS Code"
+                          className="w-36 h-36 mx-auto rounded-lg"
+                        />
+                      </div>
+                      <p className="text-[11px] text-slate-500">Mendukung GoPay, OVO, DANA, BCA, ShopeePay</p>
+                    </div>
+
+                    <button
+                      onClick={handleCheckout}
+                      disabled={cart.length === 0 || totalAmount <= 0}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white py-3.5 rounded-xl font-bold text-base shadow-lg shadow-emerald-200 disabled:bg-slate-300 disabled:shadow-none transition"
+                    >
+                      Konfirmasi QRIS Berhasil & Cetak Struk 📱
+                    </button>
                   </div>
-                  <div className="grid grid-cols-3 gap-1.5">
-                    <button onClick={() => setCash(totalAmount)} className="px-2 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-300 rounded-lg text-xs font-bold">💵 Uang Pas</button>
-                    <button onClick={() => addCashNominal(10000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 10.000</button>
-                    <button onClick={() => addCashNominal(20000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 20.000</button>
-                    <button onClick={() => addCashNominal(50000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 50.000</button>
-                    <button onClick={() => addCashNominal(100000)} className="px-2 py-1.5 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold">+ 100.000</button>
-                    <button onClick={() => addCashNominal(1000)} className="px-2 py-1.5 bg-blue-50 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold">+ 1.000</button>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="text-xs font-semibold text-slate-600">Uang Diterima (Rp):</label>
-                  <input
-                    type="number"
-                    value={cash || ''}
-                    onChange={(e) => setCash(Number(e.target.value))}
-                    placeholder="0"
-                    className="w-full p-2.5 border rounded-xl mt-1 font-black text-lg focus:ring-2 focus:ring-blue-500 outline-none"
-                  />
-                  <p className="text-[11px] font-semibold text-blue-700 bg-blue-50 p-2 rounded-lg mt-1 italic border border-blue-100">
-                    🗣️ Terbilang: <span className="font-bold">{terbilangIndonesia(cash)}</span>
-                  </p>
-                </div>
-
-                <div className="flex justify-between text-sm py-1 bg-slate-50 p-2.5 rounded-lg border">
-                  <span className="text-slate-600">Kembalian:</span>
-                  <span className={changeReturned < 0 ? 'text-red-500 font-bold' : 'text-emerald-600 font-extrabold text-base'}>
-                    Rp {changeReturned >= 0 ? changeReturned.toLocaleString('id-ID') : 0}
-                  </span>
-                </div>
-
-                <button
-                  onClick={handleCheckout}
-                  disabled={cart.length === 0 || totalAmount <= 0}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 rounded-xl font-bold text-base shadow-lg shadow-blue-200 disabled:bg-slate-300 disabled:shadow-none transition"
-                >
-                  Bayar & Cetak Struk 🧾
-                </button>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* Tab Riwayat */}
+        {/* TAB RIWAYAT OMSET */}
         {activeTab === 'riwayat' && (
           <div className="flex-1 p-6 overflow-y-auto max-w-5xl mx-auto w-full space-y-6">
             <div className="flex justify-between items-center bg-white p-6 rounded-2xl border shadow-sm">
@@ -497,6 +625,7 @@ export default function KasirPanelPage() {
                     <div>
                       <span className="font-black text-blue-700 text-sm">{tx.invoice_number}</span>
                       <span className="ml-2 bg-blue-50 text-blue-700 text-xs px-2 py-0.5 rounded font-bold">👤 {tx.customer_name}</span>
+                      <span className="ml-2 bg-emerald-50 text-emerald-700 text-xs px-2 py-0.5 rounded font-bold">💳 {tx.payment_method || 'Tunai'}</span>
                       <p className="text-xs text-slate-400 mt-0.5">⏰ {new Date(tx.created_at).toLocaleTimeString('id-ID')} WIB</p>
                     </div>
                     <span className="font-black text-base text-slate-900">Rp {Number(tx.total_amount).toLocaleString('id-ID')}</span>
@@ -516,7 +645,7 @@ export default function KasirPanelPage() {
         )}
       </div>
 
-      {/* Modal Struk */}
+      {/* MODAL STRUK PEMBAYARAN */}
       {lastReceipt && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-3xl p-6 max-w-md w-full shadow-2xl space-y-4">
@@ -524,8 +653,13 @@ export default function KasirPanelPage() {
               <span className="text-3xl">🧾</span>
               <h3 className="text-xl font-black text-slate-800 mt-1">STRUK PEMBAYARAN</h3>
               <p className="text-xs text-slate-400">{lastReceipt.invoiceNumber} • {lastReceipt.date}</p>
-              <div className="mt-2 inline-block bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-bold">
-                Pelanggan: {lastReceipt.customerName}
+              <div className="mt-2 flex justify-center gap-2">
+                <span className="bg-slate-100 text-slate-700 px-3 py-1 rounded-full text-xs font-bold">
+                  Pelanggan: {lastReceipt.customerName}
+                </span>
+                <span className="bg-emerald-50 text-emerald-700 px-3 py-1 rounded-full text-xs font-bold border border-emerald-200">
+                  Metode: {lastReceipt.paymentMethod}
+                </span>
               </div>
             </div>
 
@@ -539,8 +673,8 @@ export default function KasirPanelPage() {
             </div>
 
             <div className="space-y-1.5 text-sm">
-              <div className="flex justify-between font-bold"><span>Total:</span><span>Rp {lastReceipt.totalAmount.toLocaleString('id-ID')}</span></div>
-              <div className="flex justify-between text-slate-500"><span>Dibayar:</span><span>Rp {lastReceipt.cashReceived.toLocaleString('id-ID')}</span></div>
+              <div className="flex justify-between font-bold"><span>Total Tagihan:</span><span>Rp {lastReceipt.totalAmount.toLocaleString('id-ID')}</span></div>
+              <div className="flex justify-between text-slate-500"><span>Uang Diterima:</span><span>Rp {lastReceipt.cashReceived.toLocaleString('id-ID')}</span></div>
               <div className="flex justify-between font-extrabold text-emerald-600 border-t pt-1"><span>Kembalian:</span><span>Rp {lastReceipt.changeReturned.toLocaleString('id-ID')}</span></div>
             </div>
 
